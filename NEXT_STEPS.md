@@ -84,3 +84,12 @@ In `neg_env/games/auction.py`, implement:
 - **Validation**: in `apply_action` and game logic, validate `action_type` and `payload` against the spec’s `action_types` and `payload_schema`.
 
 Implementing 1 → 2 → 3 → 4 gives a minimal end-to-end flow (MCP client plays split100); then 5 adds a second game; then 6 polishes.
+
+---
+
+## When to add tests
+
+- **After step 1 (now):** Good moment to add a first test module. You can test `create_match` (match has correct game_state, status, agent_ids) and `get_turn_state` (returns TurnState with right phase, is_my_turn, game_state). No game logic yet, so tests are simple and stable.
+- **After step 3 (Split100):** Add tests for one full game: create match → get turn state → apply offer/accept/reject → assert outcome. This locks in the main flow.
+- **After step 4 (MCP tools):** Optionally add integration tests that call the MCP server tools (e.g. start_game, get_turn_state) and assert on responses.
+- **Ongoing:** Add unit tests for new game logic (e.g. auction apply_action, compute_outcome) as you implement step 5 and 6.

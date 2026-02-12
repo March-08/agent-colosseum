@@ -1,33 +1,113 @@
 """Match runner: advances turns, applies actions, computes outcomes."""
 
+import copy
+import time
+import uuid
+
 from neg_env.spec import GameSpec
-from neg_env.types import Action, Message, TurnState
+from neg_env.spec.schema import TurnOrder
+from neg_env.types import Action, Message, MessageScope, TurnState
 
 from neg_env.core.match import Match, MatchStatus
 
 
 def create_match(match_id: str, game_id: str, spec: GameSpec, agent_ids: list[str]) -> Match:
     """Create a new match (waiting or running depending on spec)."""
-    # Stub: no logic yet
-    raise NotImplementedError("create_match: implement with spec.initial_game_state and status=RUNNING when enough agents")
+    game_state = copy.deepcopy(spec.initial_game_state)
+    status = MatchStatus.RUNNING
+    return Match(
+        match_id=match_id,
+        game_id=game_id,
+        spec=spec,
+        agent_ids=list(agent_ids),
+        status=status,
+        current_phase_index=0,
+        current_round=0,
+        current_turn_index=0,
+        game_state=game_state,
+        messages=[],
+        outcome=None,
+    )
+
+
+def _build_placeholder_turn_state(match: Match, agent_id: str) -> TurnState:
+    """Build a minimal TurnState from match when the game does not implement compute_turn_state yet."""
+    phase = match.spec.phases[match.current_phase_index].name if match.spec.phases else ""
+    current_turn_agent_id: str | None = None
+    is_my_turn = False
+    if match.agent_ids and 0 <= match.current_turn_index < len(match.agent_ids):
+        current_turn_agent_id = match.agent_ids[match.current_turn_index]
+        is_my_turn = current_turn_agent_id == agent_id
+    return TurnState(
+        match_id=match.match_id,
+        game_id=match.game_id,
+        agent_id=agent_id,
+        phase=phase,
+        is_my_turn=is_my_turn,
+        current_turn_agent_id=current_turn_agent_id,
+        game_state=dict(match.game_state),
+        messages=list(match.messages),
+        allowed_actions=[],
+        game_over=(match.status == MatchStatus.FINISHED),
+        outcome=match.outcome,
+    )
 
 
 def get_turn_state(match: Match, agent_id: str) -> TurnState | None:
     """Return the turn state for the given agent (what they see and can do)."""
-    # Stub: no logic yet
-    raise NotImplementedError("get_turn_state: implement from match.game_state, messages, phase, allowed_actions")
+    from neg_env.games import get_game
+
+    game = get_game(match.game_id)
+    if game is None:
+        return _build_placeholder_turn_state(match, agent_id)
+    try:
+        return game.compute_turn_state(match, agent_id)
+    except NotImplementedError:
+        return _build_placeholder_turn_state(match, agent_id)
 
 
 def apply_message(match: Match, sender_id: str, scope: str, content: str, to_agent_ids: list[str] | None) -> None:
     """Record a public or private message and advance state if needed."""
-    # Stub: no logic yet
-    raise NotImplementedError("apply_message: append message, possibly advance turn/round/phase")
+    scope_enum = MessageScope.PUBLIC if scope == "public" else MessageScope.PRIVATE
+    to_list = list(to_agent_ids) if to_agent_ids else []
+    msg = Message(
+        message_id=uuid.uuid4().hex,
+        sender_id=sender_id,
+        scope=scope_enum,
+        content=content,
+        to_agent_ids=to_list,
+        timestamp_ns=time.time_ns(),
+    )
+    match.messages.append(msg)
+    if match.status != MatchStatus.RUNNING:
+        return
+    if not match.spec.phases:
+        return
+    phase = match.spec.phases[match.current_phase_index]
+    if phase.turn_order != TurnOrder.ROUND_ROBIN or phase.max_actions_per_turn < 1:
+        return
+    n = len(match.agent_ids)
+    if n == 0:
+        return
+    match.current_turn_index = (match.current_turn_index + 1) % n
+    if match.current_turn_index == 0:
+        match.current_round += 1
 
 
 def apply_action(match: Match, agent_id: str, action: Action) -> None:
     """Apply a game action (e.g. submit_offer, place_bid); may advance turn/phase and set outcome."""
-    # Stub: no logic yet
-    raise NotImplementedError("apply_action: validate, update game_state, advance turn/phase, compute outcome when done")
+    from neg_env.games import get_game
+
+    game = get_game(match.game_id)
+    if game is None:
+        return
+    game.apply_action(match, agent_id, action)
+    if match.status == MatchStatus.FINISHED:
+        return
+    outcome = game.compute_outcome(match)
+    if outcome is not None:
+        match.outcome = outcome
+        match.status = MatchStatus.FINISHED
 
 
 class MatchRunner:
