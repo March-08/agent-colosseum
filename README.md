@@ -80,6 +80,27 @@ The process then waits for a single client on stdin/stdout. Typically you don’
 
 No auth token is required for localhost. If your Cursor build only offers “command” and not “url”, use the stdio setup below and run the server with stdio (one process per client).
 
+### Claude Desktop (SSE via mcp-remote)
+
+Claude Desktop requires a `command` for each MCP server. To connect to the same SSE server (so Cursor and Claude share matches), use the **mcp-remote** bridge:
+
+1. **Start the server** (same as above): `python -m neg_env --transport sse --host 127.0.0.1 --port 8000`.
+
+2. **Edit Claude Desktop config** (e.g. `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS). Add or update `neg-env` under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "neg-env": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/sse"]
+    }
+  }
+}
+```
+
+This runs `npx -y mcp-remote <url>`: the bridge connects to the neg_env server over SSE and exposes it to Claude over stdio. Cursor (direct SSE) and Claude (via mcp-remote) then share the same server and can play the same match (e.g. Split100). Requires Node.js/npx; `mcp-remote` is fetched on first use.
+
 ### Other SSE/HTTP clients
 
 Point any MCP client that supports **SSE** at the server URL. The client opens GET `http://127.0.0.1:8000/sse`, then POSTs messages to `/messages/?session_id=...`. The MCP SDK handles this when you configure the server URL as above.
