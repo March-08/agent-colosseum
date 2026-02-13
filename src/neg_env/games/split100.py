@@ -2,7 +2,16 @@
 
 from neg_env.core.match import Match, MatchStatus
 from neg_env.spec import ActionTypeDef, GameSpec, OutcomeRule, Phase, TurnOrder
-from neg_env.types import Action, AllowedAction, MessageScope, TurnState
+from neg_env.types import (
+    Action,
+    ActionError,
+    ActionResult,
+    AllowedAction,
+    MessageScope,
+    TurnState,
+    action_error,
+    action_ok,
+)
 
 from neg_env.games.base import Game
 
@@ -39,6 +48,7 @@ class Split100Game(Game):
         return GameSpec(
             game_id="split100",
             name="Split $100",
+            min_agents=2,
             description="Two agents must agree on how to split $100. Alternating offers; accept or counter.",
             phases=[
                 Phase(
@@ -63,16 +73,35 @@ class Split100Game(Game):
     def compute_turn_state(self, match: Match, agent_id: str) -> TurnState | None:
         if match.game_id != "split100":
             return None
+        if match.status != MatchStatus.RUNNING:
+            phase_name = "waiting_for_players"
+            only_agent = match.agent_ids[0] if match.agent_ids else None
+            return TurnState(
+                match_id=match.match_id,
+                game_id=match.game_id,
+                agent_id=agent_id,
+                phase=phase_name,
+                is_my_turn=False,
+                current_turn_agent_id=only_agent,
+                game_state=dict(match.game_state),
+                messages=_messages_visible_to(match.messages, agent_id),
+                allowed_actions=[],
+                game_over=(match.status == MatchStatus.FINISHED),
+                outcome=match.outcome,
+            )
         phase = match.spec.phases[match.current_phase_index] if match.spec.phases else None
         phase_name = phase.name if phase else ""
         n = len(match.agent_ids)
-        current_turn_agent_id: str | None = None
-        is_my_turn = False
-        if n and 0 <= match.current_turn_index < n:
-            current_turn_agent_id = match.agent_ids[match.current_turn_index]
-            is_my_turn = current_turn_agent_id == agent_id
+        idx = match.current_turn_index
+        if idx < 0 or idx >= n:
+            idx = 0
+        current_turn_agent_id = match.agent_ids[idx] if n else None
+        is_my_turn = current_turn_agent_id == agent_id
         messages = _messages_visible_to(match.messages, agent_id)
         allowed_actions = _build_allowed_actions(match.spec, phase_name, is_my_turn)
+        last_offer_by = match.game_state.get("last_offer_by")
+        if last_offer_by == agent_id:
+            allowed_actions = [a for a in allowed_actions if a.action_type != "accept"]
         return TurnState(
             match_id=match.match_id,
             game_id=match.game_id,
@@ -104,40 +133,44 @@ class Split100Game(Game):
             }
             match.status = MatchStatus.FINISHED
 
-    def apply_action(self, match: Match, agent_id: str, action: Action) -> bool:
-        if match.game_id != "split100" or match.status != MatchStatus.RUNNING:
-            return False
+    def apply_action(self, match: Match, agent_id: str, action: Action) -> ActionResult:
+        if match.game_id != "split100":
+            return action_error(ActionError.MATCH_NOT_RUNNING, "Not a split100 match")
+        if match.status != MatchStatus.RUNNING:
+            return action_error(ActionError.MATCH_NOT_RUNNING, "Match is not running")
         phase = match.spec.phases[match.current_phase_index] if match.spec.phases else None
         if not phase or phase.name != "negotiation":
-            return False
+            return action_error(ActionError.MATCH_NOT_RUNNING, "Not in negotiation phase")
         n = len(match.agent_ids)
         if n == 0:
-            return False
+            return action_error(ActionError.MATCH_NOT_RUNNING, "No agents in match")
         current_turn_agent_id = match.agent_ids[match.current_turn_index]
         if agent_id != current_turn_agent_id:
-            return False
+            return action_error(ActionError.NOT_YOUR_TURN, f"It is {current_turn_agent_id}'s turn")
         total = match.game_state.get("total", 100)
 
         if action.action_type == "submit_offer":
             my_share = action.payload.get("my_share")
             if my_share is None:
-                return False
+                return action_error(ActionError.INVALID_PAYLOAD, "my_share is required")
             try:
                 my_share = float(my_share)
             except (TypeError, ValueError):
-                return False
+                return action_error(ActionError.INVALID_PAYLOAD, "my_share must be a number")
             if not (0 <= my_share <= total):
-                return False
+                return action_error(ActionError.INVALID_PAYLOAD, f"my_share must be between 0 and {total}")
             match.game_state["current_offer"] = my_share
             match.game_state["last_offer_by"] = agent_id
             self._advance_turn_and_check_rounds(match)
-            return True
+            return action_ok()
 
         if action.action_type == "accept":
             current_offer = match.game_state.get("current_offer")
             last_offer_by = match.game_state.get("last_offer_by")
             if current_offer is None or last_offer_by is None:
-                return False
+                return action_error(ActionError.GAME_RULE_VIOLATION, "No active offer to accept")
+            if last_offer_by == agent_id:
+                return action_error(ActionError.GAME_RULE_VIOLATION, "Cannot accept your own offer")
             payoffs = []
             for aid in match.agent_ids:
                 if aid == last_offer_by:
@@ -146,13 +179,13 @@ class Split100Game(Game):
                     payoffs.append({"agent_id": aid, "value": float(total - current_offer)})
             match.outcome = {"payoffs": payoffs, "reason": "agreement"}
             match.status = MatchStatus.FINISHED
-            return True
+            return action_ok()
 
         if action.action_type == "reject":
             self._advance_turn_and_check_rounds(match)
-            return True
+            return action_ok()
 
-        return False
+        return action_error(ActionError.INVALID_ACTION_TYPE, f"Unknown action type: {action.action_type}")
 
     def compute_outcome(self, match: Match) -> dict | None:
         if match.status == MatchStatus.FINISHED and match.outcome is not None:

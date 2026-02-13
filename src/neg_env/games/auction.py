@@ -1,6 +1,8 @@
 """Simple auction: N agents discuss then place sealed bids."""
 
+from neg_env.core.match import Match
 from neg_env.spec import ActionTypeDef, GameSpec, OutcomeRule, Phase, TurnOrder
+from neg_env.types import Action, ActionResult
 
 from neg_env.games.base import Game
 
@@ -41,7 +43,7 @@ class SimpleAuctionGame(Game):
     def compute_turn_state(self, match, agent_id):
         raise NotImplementedError("SimpleAuctionGame.compute_turn_state")
 
-    def apply_action(self, match, agent_id, action):
+    def apply_action(self, match: Match, agent_id: str, action: Action) -> ActionResult:
         raise NotImplementedError("SimpleAuctionGame.apply_action")
 
     def compute_outcome(self, match):

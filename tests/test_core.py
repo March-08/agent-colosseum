@@ -104,7 +104,8 @@ def test_apply_message_appends_public_message():
     spec = get_game_spec("split100")
     assert spec is not None
     match = create_match("m1", "split100", spec, ["a", "b"])
-    apply_message(match, "a", "public", "Hello all", None)
+    result = apply_message(match, "a", "public", "Hello all", None)
+    assert result.ok is True
     assert len(match.messages) == 1
     msg = match.messages[0]
     assert msg.sender_id == "a"
@@ -120,23 +121,26 @@ def test_apply_message_appends_private_message():
     spec = get_game_spec("split100")
     assert spec is not None
     match = create_match("m1", "split100", spec, ["a", "b"])
-    apply_message(match, "a", "private", "Secret", ["b"])
+    result = apply_message(match, "a", "private", "Secret", ["b"])
+    assert result.ok is True
     assert len(match.messages) == 1
     assert match.messages[0].scope == MessageScope.PRIVATE
     assert match.messages[0].to_agent_ids == ["b"]
 
 
-def test_apply_message_advances_turn_round_robin():
-    """For ROUND_ROBIN phase, apply_message advances current_turn_index."""
+def test_apply_message_does_not_advance_turn():
+    """Messages do NOT advance current_turn_index (turns only advance on game actions)."""
     spec = get_game_spec("split100")
     assert spec is not None
     match = create_match("m1", "split100", spec, ["a", "b"])
     assert match.current_turn_index == 0
-    apply_message(match, "a", "public", "msg", None)
-    assert match.current_turn_index == 1
-    apply_message(match, "b", "public", "msg2", None)
+    result = apply_message(match, "a", "public", "msg", None)
+    assert result.ok is True
     assert match.current_turn_index == 0
-    assert match.current_round == 1
+    result2 = apply_message(match, "b", "public", "msg2", None)
+    assert result2.ok is True
+    assert match.current_turn_index == 0
+    assert match.current_round == 0
 
 
 def test_get_turn_state_includes_messages_after_apply_message():
@@ -152,13 +156,13 @@ def test_get_turn_state_includes_messages_after_apply_message():
 
 
 def test_match_runner_send_public_message():
-    """MatchRunner.send_public_message calls apply_message and returns True."""
+    """MatchRunner.send_public_message calls apply_message and returns ActionResult."""
     spec = get_game_spec("split100")
     assert spec is not None
     runner = MatchRunner()
     runner.create_match("m1", "split100", spec, ["a", "b"])
-    ok = runner.send_public_message("m1", "a", "Hi")
-    assert ok is True
+    result = runner.send_public_message("m1", "a", "Hi")
+    assert result.ok is True
     match = runner.get_match("m1")
     assert match is not None
     assert len(match.messages) == 1
@@ -171,19 +175,21 @@ def test_match_runner_send_private_message():
     assert spec is not None
     runner = MatchRunner()
     runner.create_match("m1", "split100", spec, ["a", "b"])
-    ok = runner.send_private_message("m1", "a", "Only for b", ["b"])
-    assert ok is True
+    result = runner.send_private_message("m1", "a", "Only for b", ["b"])
+    assert result.ok is True
     match = runner.get_match("m1")
     assert match.messages[0].scope == MessageScope.PRIVATE
     assert match.messages[0].to_agent_ids == ["b"]
 
 
-def test_apply_message_no_turn_advance_when_finished():
-    """apply_message does not advance turn when match is already finished."""
+def test_apply_message_rejected_when_finished():
+    """apply_message returns error when match is finished; message is NOT appended."""
     spec = get_game_spec("split100")
     assert spec is not None
     match = create_match("m1", "split100", spec, ["a", "b"])
     match.status = MatchStatus.FINISHED
-    apply_message(match, "a", "public", "late", None)
-    assert len(match.messages) == 1
+    result = apply_message(match, "a", "public", "late", None)
+    assert result.ok is False
+    assert result.error == "match_not_running"
+    assert len(match.messages) == 0
     assert match.current_turn_index == 0

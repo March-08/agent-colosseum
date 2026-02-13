@@ -60,3 +60,49 @@ class Payoff(BaseModel):
 
     agent_id: str = Field(..., description="Agent id")
     value: float = Field(..., description="Payoff value (e.g. dollars, utility)")
+
+
+class ActionError(str, Enum):
+    """Structured error codes for action results."""
+
+    MATCH_NOT_FOUND = "match_not_found"
+    MATCH_NOT_RUNNING = "match_not_running"
+    NOT_YOUR_TURN = "not_your_turn"
+    INVALID_ACTION_TYPE = "invalid_action_type"
+    INVALID_PAYLOAD = "invalid_payload"
+    GAME_RULE_VIOLATION = "game_rule_violation"
+    AGENT_NOT_IN_MATCH = "agent_not_in_match"
+
+
+class ActionResult(BaseModel):
+    """Structured result returned by action/message operations."""
+
+    ok: bool = Field(..., description="Whether the operation succeeded")
+    error: str | None = Field(default=None, description="Error code if failed")
+    error_detail: str | None = Field(default=None, description="Human-readable error detail")
+
+
+def action_ok() -> ActionResult:
+    """Create a successful ActionResult."""
+    return ActionResult(ok=True)
+
+
+def action_error(error: ActionError | str, detail: str | None = None) -> ActionResult:
+    """Create a failed ActionResult with error code and optional detail."""
+    code = error.value if isinstance(error, ActionError) else error
+    return ActionResult(ok=False, error=code, error_detail=detail)
+
+
+class MessageIntent(BaseModel):
+    """Lightweight message intent from an agent (runner fills sender_id, message_id, etc.)."""
+
+    scope: MessageScope = Field(..., description="Public or private")
+    content: str = Field(..., description="Message text")
+    to_agent_ids: list[str] = Field(default_factory=list, description="For private: recipient agent ids")
+
+
+class AgentResponse(BaseModel):
+    """What an agent returns from act(): messages to send + a game action."""
+
+    messages: list[MessageIntent] = Field(default_factory=list, description="Messages to send before acting")
+    action: Action = Field(..., description="The game action to perform")

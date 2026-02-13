@@ -3,18 +3,29 @@
 import copy
 import time
 import uuid
+from collections import deque
 
 from neg_env.spec import GameSpec
 from neg_env.spec.schema import TurnOrder
-from neg_env.types import Action, Message, MessageScope, TurnState
+from neg_env.types import (
+    Action,
+    ActionError,
+    ActionResult,
+    Message,
+    MessageScope,
+    TurnState,
+    action_error,
+    action_ok,
+)
 
 from neg_env.core.match import Match, MatchStatus
 
 
 def create_match(match_id: str, game_id: str, spec: GameSpec, agent_ids: list[str]) -> Match:
-    """Create a new match (waiting or running depending on spec)."""
+    """Create a new match (WAITING until min_agents have joined, then RUNNING)."""
     game_state = copy.deepcopy(spec.initial_game_state)
-    status = MatchStatus.RUNNING
+    min_agents = getattr(spec, "min_agents", 1)
+    status = MatchStatus.RUNNING if len(agent_ids) >= min_agents else MatchStatus.WAITING
     return Match(
         match_id=match_id,
         game_id=game_id,
@@ -66,8 +77,12 @@ def get_turn_state(match: Match, agent_id: str) -> TurnState | None:
         return _build_placeholder_turn_state(match, agent_id)
 
 
-def apply_message(match: Match, sender_id: str, scope: str, content: str, to_agent_ids: list[str] | None) -> None:
-    """Record a public or private message and advance state if needed."""
+def apply_message(match: Match, sender_id: str, scope: str, content: str, to_agent_ids: list[str] | None) -> ActionResult:
+    """Record a public or private message. Messages do NOT advance turns."""
+    if match.status != MatchStatus.RUNNING:
+        return action_error(ActionError.MATCH_NOT_RUNNING, "Match is not running")
+    if sender_id not in match.agent_ids:
+        return action_error(ActionError.AGENT_NOT_IN_MATCH, f"Agent {sender_id} is not in this match")
     scope_enum = MessageScope.PUBLIC if scope == "public" else MessageScope.PRIVATE
     to_list = list(to_agent_ids) if to_agent_ids else []
     msg = Message(
@@ -79,35 +94,29 @@ def apply_message(match: Match, sender_id: str, scope: str, content: str, to_age
         timestamp_ns=time.time_ns(),
     )
     match.messages.append(msg)
-    if match.status != MatchStatus.RUNNING:
-        return
-    if not match.spec.phases:
-        return
-    phase = match.spec.phases[match.current_phase_index]
-    if phase.turn_order != TurnOrder.ROUND_ROBIN or phase.max_actions_per_turn < 1:
-        return
-    n = len(match.agent_ids)
-    if n == 0:
-        return
-    match.current_turn_index = (match.current_turn_index + 1) % n
-    if match.current_turn_index == 0:
-        match.current_round += 1
+    return action_ok()
 
 
-def apply_action(match: Match, agent_id: str, action: Action) -> None:
-    """Apply a game action (e.g. submit_offer, place_bid); may advance turn/phase and set outcome."""
+def apply_action(match: Match, agent_id: str, action: Action) -> ActionResult:
+    """Apply a game action (e.g. submit_offer, accept); may advance turn/phase and set outcome."""
     from neg_env.games import get_game
 
     game = get_game(match.game_id)
     if game is None:
-        return
-    game.apply_action(match, agent_id, action)
+        return action_error(ActionError.MATCH_NOT_FOUND, f"No game registered for {match.game_id}")
+    result = game.apply_action(match, agent_id, action)
+    if not result.ok:
+        return result
     if match.status == MatchStatus.FINISHED:
-        return
+        return result
     outcome = game.compute_outcome(match)
     if outcome is not None:
         match.outcome = outcome
         match.status = MatchStatus.FINISHED
+    return result
+
+
+MAX_EVENTS_PER_MATCH = 500
 
 
 class MatchRunner:
@@ -115,12 +124,30 @@ class MatchRunner:
 
     def __init__(self) -> None:
         self._matches: dict[str, Match] = {}
+        self._match_events: dict[str, deque] = {}
 
     def create_match(self, match_id: str, game_id: str, spec: GameSpec, agent_ids: list[str]) -> Match:
         """Create and store a new match."""
         match = create_match(match_id, game_id, spec, agent_ids)
         self._matches[match_id] = match
+        self._match_events[match_id] = deque(maxlen=MAX_EVENTS_PER_MATCH)
         return match
+
+    def record_match_event(self, match_id: str, event: str, **kwargs: object) -> None:
+        """Append an event to the match's history (for dashboard)."""
+        if match_id not in self._matches:
+            return
+        if match_id not in self._match_events:
+            self._match_events[match_id] = deque(maxlen=MAX_EVENTS_PER_MATCH)
+        self._match_events[match_id].append({
+            "event": event,
+            "timestamp": round(time.time(), 3),
+            **kwargs,
+        })
+
+    def get_match_events(self, match_id: str) -> list[dict]:
+        """Return event history for a match (newest last)."""
+        return list(self._match_events.get(match_id, []))
 
     def get_match(self, match_id: str) -> Match | None:
         """Return match by id."""
@@ -133,30 +160,25 @@ class MatchRunner:
             return None
         return get_turn_state(match, agent_id)
 
-    def send_public_message(self, match_id: str, sender_id: str, content: str) -> bool:
-        """Record a public message; return True if accepted."""
+    def send_public_message(self, match_id: str, sender_id: str, content: str) -> ActionResult:
+        """Record a public message; return ActionResult."""
         match = self._matches.get(match_id)
         if match is None:
-            return False
-        apply_message(match, sender_id, "public", content, None)
-        return True
+            return action_error(ActionError.MATCH_NOT_FOUND, "Match not found")
+        return apply_message(match, sender_id, "public", content, None)
 
     def send_private_message(
         self, match_id: str, sender_id: str, content: str, to_agent_ids: list[str]
-    ) -> bool:
-        """Record a private message; return True if accepted."""
+    ) -> ActionResult:
+        """Record a private message; return ActionResult."""
         match = self._matches.get(match_id)
         if match is None:
-            return False
-        apply_message(match, sender_id, "private", content, to_agent_ids)
-        return True
+            return action_error(ActionError.MATCH_NOT_FOUND, "Match not found")
+        return apply_message(match, sender_id, "private", content, to_agent_ids)
 
-    def perform_action(self, match_id: str, agent_id: str, action_type: str, payload: dict) -> bool:
-        """Apply a game action; return True if accepted."""
+    def perform_action(self, match_id: str, agent_id: str, action_type: str, payload: dict) -> ActionResult:
+        """Apply a game action; return ActionResult."""
         match = self._matches.get(match_id)
         if match is None:
-            return False
-        from neg_env.types import Action
-
-        apply_action(match, agent_id, Action(action_type=action_type, payload=payload))
-        return True
+            return action_error(ActionError.MATCH_NOT_FOUND, "Match not found")
+        return apply_action(match, agent_id, Action(action_type=action_type, payload=payload))

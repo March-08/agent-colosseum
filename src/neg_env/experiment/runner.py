@@ -1,0 +1,186 @@
+"""ExperimentRunner: run N matches programmatically with pluggable agents."""
+
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from neg_env.agents.base import Agent
+from neg_env.core.match import MatchStatus
+from neg_env.core.runner import apply_action, apply_message, create_match, get_turn_state
+from neg_env.games import get_game_spec
+from neg_env.games.builtins import ensure_builtins_registered
+from neg_env.logging.match_logger import MatchLog, MatchLogger
+from neg_env.types import Action
+
+
+class ExperimentConfig(BaseModel):
+    """Configuration for an experiment."""
+
+    game_id: str = Field(..., description="Game to play")
+    num_matches: int = Field(default=1, description="Number of matches to run")
+    max_turns_per_match: int = Field(default=200, description="Max turns before aborting a match")
+    max_messages_per_turn: int = Field(default=10, description="Max messages an agent can send per turn")
+    log_directory: Path | None = Field(default=None, description="Directory to save match logs")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata")
+
+
+class MatchResult(BaseModel):
+    """Result of a single match."""
+
+    match_id: str
+    game_id: str
+    agent_ids: list[str]
+    outcome: dict[str, Any] | None = None
+    status: str = ""
+    num_turns: int = 0
+    num_messages: int = 0
+    duration_seconds: float = 0.0
+    log: MatchLog | None = None
+    error: str | None = None
+
+
+class ExperimentResult(BaseModel):
+    """Result of running an experiment (N matches)."""
+
+    game_id: str
+    num_matches: int
+    match_results: list[MatchResult] = Field(default_factory=list)
+    total_duration_seconds: float = 0.0
+
+    @property
+    def payoff_matrix(self) -> dict[str, list[float]]:
+        """agent_id -> list of payoffs across matches."""
+        matrix: dict[str, list[float]] = {}
+        for mr in self.match_results:
+            if mr.outcome and "payoffs" in mr.outcome:
+                for p in mr.outcome["payoffs"]:
+                    aid = p["agent_id"]
+                    matrix.setdefault(aid, []).append(float(p["value"]))
+        return matrix
+
+    @property
+    def mean_payoffs(self) -> dict[str, float]:
+        """agent_id -> mean payoff across matches."""
+        return {
+            aid: sum(vals) / len(vals) if vals else 0.0
+            for aid, vals in self.payoff_matrix.items()
+        }
+
+    @property
+    def completion_rate(self) -> float:
+        """Fraction of matches that finished (FINISHED status)."""
+        if not self.match_results:
+            return 0.0
+        finished = sum(1 for mr in self.match_results if mr.status == "finished")
+        return finished / len(self.match_results)
+
+
+class ExperimentRunner:
+    """Runs N matches with pluggable agents and collects results."""
+
+    def __init__(self, config: ExperimentConfig) -> None:
+        self._config = config
+
+    def run(self, agents: list[Agent]) -> ExperimentResult:
+        """Run the experiment: N matches with the given agents."""
+        ensure_builtins_registered()
+
+        spec = get_game_spec(self._config.game_id)
+        if spec is None:
+            raise ValueError(f"Unknown game: {self._config.game_id}")
+
+        min_agents = getattr(spec, "min_agents", 1)
+        if len(agents) < min_agents:
+            raise ValueError(
+                f"Game '{self._config.game_id}' requires at least {min_agents} agents, got {len(agents)}"
+            )
+
+        start_time = time.monotonic()
+        match_results: list[MatchResult] = []
+
+        for _ in range(self._config.num_matches):
+            mr = self._run_single_match(agents, spec)
+            match_results.append(mr)
+
+        total_duration = time.monotonic() - start_time
+        return ExperimentResult(
+            game_id=self._config.game_id,
+            num_matches=self._config.num_matches,
+            match_results=match_results,
+            total_duration_seconds=total_duration,
+        )
+
+    def _run_single_match(self, agents: list[Agent], spec: Any) -> MatchResult:
+        """Run a single match to completion or max_turns."""
+        match_id = uuid.uuid4().hex
+        agent_ids = [a.agent_id for a in agents]
+        agent_map = {a.agent_id: a for a in agents}
+        match = create_match(match_id, self._config.game_id, spec, agent_ids)
+
+        logger = MatchLogger(match_id, self._config.game_id, agent_ids)
+        logger.set_metadata(**self._config.metadata)
+        logger.log_event("match_start")
+
+        for agent in agents:
+            agent.on_match_start(match_id, self._config.game_id, agent_ids)
+
+        start_time = time.monotonic()
+        turn_count = 0
+        message_count = 0
+        error_str: str | None = None
+
+        try:
+            while match.status == MatchStatus.RUNNING and turn_count < self._config.max_turns_per_match:
+                current_agent_id = agent_ids[match.current_turn_index % len(agent_ids)]
+                agent = agent_map[current_agent_id]
+
+                state = get_turn_state(match, current_agent_id)
+                if state is None:
+                    break
+
+                response = agent.act(state)
+
+                # Apply messages (capped)
+                for msg in response.messages[: self._config.max_messages_per_turn]:
+                    msg_result = apply_message(
+                        match, current_agent_id, msg.scope.value, msg.content, msg.to_agent_ids or None
+                    )
+                    if msg_result.ok:
+                        message_count += 1
+                    logger.log_messages(current_agent_id, [msg])
+
+                # Apply game action
+                action = response.action
+                result = apply_action(match, current_agent_id, action)
+                logger.log_action(current_agent_id, action.action_type, action.payload, result)
+
+                turn_count += 1
+        except Exception as e:
+            error_str = str(e)
+
+        duration = time.monotonic() - start_time
+        logger.set_outcome(match.outcome)
+        logger.log_event("match_end", status=match.status.value)
+
+        for agent in agents:
+            agent.on_match_end(match_id, match.outcome)
+
+        log = logger.to_log()
+        if self._config.log_directory:
+            logger.save(self._config.log_directory)
+
+        return MatchResult(
+            match_id=match_id,
+            game_id=self._config.game_id,
+            agent_ids=agent_ids,
+            outcome=match.outcome,
+            status=match.status.value,
+            num_turns=turn_count,
+            num_messages=message_count,
+            duration_seconds=duration,
+            log=log,
+            error=error_str,
+        )

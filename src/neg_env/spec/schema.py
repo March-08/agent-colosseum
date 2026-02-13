@@ -50,6 +50,7 @@ class GameSpec(BaseModel):
 
     game_id: str = Field(..., description="Unique game identifier")
     name: str = Field(..., description="Human-readable name")
+    min_agents: int = Field(default=1, description="Minimum agents required before match can run (e.g. 2 for two-player games)")
     description: str = Field(default="", description="Rules in natural language (for get_game_rules)")
     phases: list[Phase] = Field(default_factory=list, description="Ordered phases")
     action_types: list[ActionTypeDef] = Field(default_factory=list, description="All action types used in this game")
