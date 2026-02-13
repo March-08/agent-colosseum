@@ -20,7 +20,7 @@ Run 100 matches of Split $100 between two random agents in four lines:
 ```python
 from neg_env import RandomAgent, ExperimentRunner, ExperimentConfig
 
-config = ExperimentConfig(game_id="split100", num_matches=100)
+config = ExperimentConfig(game_id="fair-split", num_matches=100)
 agents = [RandomAgent(agent_id="alice", seed=42), RandomAgent(agent_id="bob", seed=43)]
 result = ExperimentRunner(config).run(agents)
 
@@ -72,7 +72,7 @@ Then run it:
 ```python
 from neg_env import ExperimentRunner, ExperimentConfig, RandomAgent
 
-result = ExperimentRunner(ExperimentConfig(game_id="split100", num_matches=50)).run(
+result = ExperimentRunner(ExperimentConfig(game_id="fair-split", num_matches=50)).run(
     [FairSplitAgent("fair"), RandomAgent(agent_id="random", seed=1)]
 )
 print(result.mean_payoffs)
@@ -125,7 +125,7 @@ from pathlib import Path
 from neg_env import ExperimentConfig
 
 config = ExperimentConfig(
-    game_id="split100",          # which game to play
+    game_id="fair-split",          # which game to play
     num_matches=100,             # how many matches to run
     max_turns_per_match=200,     # abort match after this many turns (default: 200)
     max_messages_per_turn=10,    # cap messages per agent per turn (default: 10)
@@ -174,10 +174,13 @@ for event in log.events:
 | Agent | Description |
 |-------|-------------|
 | `RandomAgent(agent_id, seed)` | Picks a random allowed action with a valid random payload. Seeded for reproducibility. |
+| `OpenRouterNegotiationAgent(agent_id, api_key=..., model=...)` | LLM agent via OpenRouter (e.g. GPT). Sends a short negotiation message each turn then chooses submit_offer/accept/reject. Set `OPENROUTER_API_KEY` or pass `api_key`. Default model: `openai/gpt-4o-mini`. |
+| `LangChainNegotiationAgent(agent_id, runnable=..., model=...)` | Same negotiation behaviour using LangChain. Install with `pip install neg-env[langchain]`. Uses a default prompt+ChatOpenAI chain, or pass your own runnable (input: `{"system","user"}`, output: string). Requires `OPENAI_API_KEY` unless you pass a custom runnable. |
+| `LLMNegotiationBase` | Abstract base for custom framework agents: implement `_invoke_llm(system_prompt, user_content) -> str` and use helpers in `neg_env.agents.negotiation_llm` to parse and build `AgentResponse`. |
 
 ## Available games
 
-### Split $100 (`split100`)
+### Split $100 (`fair-split`)
 
 Two agents negotiate how to split $100 via alternating offers.
 
@@ -286,7 +289,7 @@ pytest tests/ -v
 | Test file | What it covers |
 |-----------|---------------|
 | `test_core.py` | Match runner, create_match, get_turn_state, apply_message |
-| `test_game_split100.py` | Split100 game flow (offer, accept, reject, error codes) |
+| `test_game_fair_split.py` | Fair-split game flow (offer, accept, reject, error codes) |
 | `test_agents.py` | Agent base class, RandomAgent |
 | `test_logging.py` | MatchLogger save/load, event logging |
 | `test_experiment.py` | ExperimentRunner, batch matches, payoff stats |
@@ -300,7 +303,7 @@ src/neg_env/
   types.py             Core types (Action, TurnState, ActionResult, AgentResponse, ...)
   spec/                Game spec schema (GameSpec, Phase, TurnOrder, ...)
   core/                Match runner and match state
-  games/               Game implementations (split100, auction) + registry
+  games/               Game implementations (fair-split, auction) + registry
   agents/              Agent base class + RandomAgent
   logging/             Match event logger (JSON logs)
   experiment/          ExperimentRunner for batch experiments

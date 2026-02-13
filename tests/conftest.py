@@ -7,5 +7,5 @@ from neg_env.games.builtins import ensure_builtins_registered
 
 @pytest.fixture(scope="session", autouse=True)
 def register_builtin_games():
-    """Register split100 and auction so runner get_turn_state can resolve games."""
+    """Register fair-split and auction so runner get_turn_state can resolve games."""
     ensure_builtins_registered()

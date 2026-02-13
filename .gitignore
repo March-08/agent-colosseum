@@ -19,13 +19,15 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.env
 
 # Virtual environments
 .venv/
 venv/
 ENV/
 env/
-
+logs
+example.py
 # IDE
 .idea/
 .vscode/

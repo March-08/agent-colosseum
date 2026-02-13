@@ -6,7 +6,11 @@ __version__ = "0.1.0"
 from neg_env.types import Action, ActionResult, AgentResponse, MessageIntent, TurnState
 
 # Agent abstractions
-from neg_env.agents import Agent, RandomAgent
+from neg_env.agents import Agent, LLMNegotiationBase, OpenRouterNegotiationAgent, RandomAgent
+try:
+    from neg_env.agents import LangChainNegotiationAgent  # noqa: F401
+except ImportError:
+    LangChainNegotiationAgent = None  # type: ignore[misc, assignment]
 
 # Experiment runner
 from neg_env.experiment import ExperimentConfig, ExperimentResult, ExperimentRunner
@@ -23,6 +27,9 @@ __all__ = [
     "TurnState",
     # Agents
     "Agent",
+    "LangChainNegotiationAgent",
+    "LLMNegotiationBase",
+    "OpenRouterNegotiationAgent",
     "RandomAgent",
     # Experiment
     "ExperimentConfig",

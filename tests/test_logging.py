@@ -6,7 +6,7 @@ from neg_env.types import ActionResult, MessageIntent, MessageScope, action_erro
 
 def test_match_logger_logs_events():
     """log_event adds events to the log."""
-    logger = MatchLogger("m1", "split100", ["a", "b"])
+    logger = MatchLogger("m1", "fair-split", ["a", "b"])
     logger.log_event("turn_start", agent_id="a", turn=1)
     logger.log_event("turn_start", agent_id="b", turn=2)
     log = logger.to_log()
@@ -19,7 +19,7 @@ def test_match_logger_logs_events():
 
 def test_match_logger_save_and_load(tmp_path):
     """Logger saves to JSON and load() reads it back."""
-    logger = MatchLogger("m1", "split100", ["a", "b"])
+    logger = MatchLogger("m1", "fair-split", ["a", "b"])
     logger.log_event("start")
     logger.set_outcome({"payoffs": [{"agent_id": "a", "value": 60}]})
     logger.set_metadata(experiment="test")
@@ -27,7 +27,7 @@ def test_match_logger_save_and_load(tmp_path):
     assert path.exists()
     loaded = MatchLogger.load(path)
     assert loaded.match_id == "m1"
-    assert loaded.game_id == "split100"
+    assert loaded.game_id == "fair-split"
     assert loaded.agent_ids == ["a", "b"]
     assert len(loaded.events) == 1
     assert loaded.outcome == {"payoffs": [{"agent_id": "a", "value": 60}]}
@@ -38,7 +38,7 @@ def test_match_log_roundtrip_serialization():
     """MatchLog serializes to JSON and deserializes back identically."""
     log = MatchLog(
         match_id="m1",
-        game_id="split100",
+        game_id="fair-split",
         agent_ids=["a", "b"],
         events=[
             MatchEvent(timestamp_ns=12345, event_type="action", agent_id="a", data={"action_type": "submit_offer"}),
@@ -53,7 +53,7 @@ def test_match_log_roundtrip_serialization():
 
 def test_match_logger_log_action_captures_error():
     """log_action captures error details from failed ActionResult."""
-    logger = MatchLogger("m1", "split100", ["a", "b"])
+    logger = MatchLogger("m1", "fair-split", ["a", "b"])
     result = action_error("invalid_payload", "my_share must be between 0 and 100")
     logger.log_action("a", "submit_offer", {"my_share": 150}, result)
     log = logger.to_log()
@@ -67,7 +67,7 @@ def test_match_logger_log_action_captures_error():
 
 def test_match_logger_log_messages():
     """log_messages logs each MessageIntent as a separate event."""
-    logger = MatchLogger("m1", "split100", ["a", "b"])
+    logger = MatchLogger("m1", "fair-split", ["a", "b"])
     msgs = [
         MessageIntent(scope=MessageScope.PUBLIC, content="Hello"),
         MessageIntent(scope=MessageScope.PRIVATE, content="Secret", to_agent_ids=["b"]),

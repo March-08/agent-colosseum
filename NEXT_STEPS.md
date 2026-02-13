@@ -1,6 +1,6 @@
 # Next steps to implement logic
 
-Skeleton is in place: types, spec schema, core (match + runner stubs), two game stubs (split100, auction), MCP server with tool list and stub handlers. Implement in this order.
+Skeleton is in place: types, spec schema, core (match + runner stubs), two game stubs (fair-split, auction), MCP server with tool list and stub handlers. Implement in this order.
 
 ---
 
@@ -33,9 +33,9 @@ This connects the runner to the game’s transition and outcome logic.
 
 ---
 
-## 3. One game end-to-end: Split100
+## 3. One game end-to-end: Fair-split
 
-Implement in `neg_env/games/split100.py`:
+Implement in `neg_env/games/fair_split.py`:
 
 - **`compute_turn_state`**
   - Build `TurnState`: `match_id`, `game_id`, `agent_id`, `phase` from current phase, `is_my_turn` from round-robin (compare `agent_id` to `match.agent_ids[match.current_turn_index]`), `game_state` from `match.game_state`, `messages` filtered to what this agent can see (public + private to/from them), `allowed_actions` from current phase’s `allowed_action_types` (and whether it’s their turn).
@@ -48,7 +48,7 @@ Implement in `neg_env/games/split100.py`:
 - **`compute_outcome`**
   - If already finished, return `match.outcome`. Otherwise return None (or compute from current state when both have accepted).
 
-After this, one full game (split100) works with the runner and MCP.
+After this, one full game (fair-split) works with the runner and MCP.
 
 ---
 
@@ -83,13 +83,13 @@ In `neg_env/games/auction.py`, implement:
 - **Message IDs and timestamps**: generate in `apply_message` and include in `Message` and in `get_turn_state` so agents see ordered history.
 - **Validation**: in `apply_action` and game logic, validate `action_type` and `payload` against the spec’s `action_types` and `payload_schema`.
 
-Implementing 1 → 2 → 3 → 4 gives a minimal end-to-end flow (MCP client plays split100); then 5 adds a second game; then 6 polishes.
+Implementing 1 → 2 → 3 → 4 gives a minimal end-to-end flow (MCP client plays fair-split); then 5 adds a second game; then 6 polishes.
 
 ---
 
 ## When to add tests
 
 - **After step 1 (now):** Good moment to add a first test module. You can test `create_match` (match has correct game_state, status, agent_ids) and `get_turn_state` (returns TurnState with right phase, is_my_turn, game_state). No game logic yet, so tests are simple and stable.
-- **After step 3 (Split100):** Add tests for one full game: create match → get turn state → apply offer/accept/reject → assert outcome. This locks in the main flow.
+- **After step 3 (Fair-split):** Add tests for one full game: create match → get turn state → apply offer/accept/reject → assert outcome. This locks in the main flow.
 - **After step 4 (MCP tools):** Optionally add integration tests that call the MCP server tools (e.g. start_game, get_turn_state) and assert on responses.
 - **Ongoing:** Add unit tests for new game logic (e.g. auction apply_action, compute_outcome) as you implement step 5 and 6.

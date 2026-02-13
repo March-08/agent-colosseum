@@ -1,4 +1,4 @@
-"""Split $100: two agents negotiate how to split 100; alternating offers."""
+"""Fair-split game: two agents negotiate how to split 100; alternating offers."""
 
 from neg_env.core.match import Match, MatchStatus
 from neg_env.spec import ActionTypeDef, GameSpec, OutcomeRule, Phase, TurnOrder
@@ -41,13 +41,13 @@ def _build_allowed_actions(spec: GameSpec, phase_name: str, is_my_turn: bool) ->
     ]
 
 
-class Split100Game(Game):
+class FairSplitGame(Game):
     """Two agents split $100; alternating offers, accept/reject."""
 
     def spec(self) -> GameSpec:
         return GameSpec(
-            game_id="split100",
-            name="Split $100",
+            game_id="fair-split",
+            name="Fair split",
             min_agents=2,
             description="Two agents must agree on how to split $100. Alternating offers; accept or counter.",
             phases=[
@@ -71,7 +71,7 @@ class Split100Game(Game):
         )
 
     def compute_turn_state(self, match: Match, agent_id: str) -> TurnState | None:
-        if match.game_id != "split100":
+        if match.game_id != "fair-split":
             return None
         if match.status != MatchStatus.RUNNING:
             phase_name = "waiting_for_players"
@@ -134,8 +134,8 @@ class Split100Game(Game):
             match.status = MatchStatus.FINISHED
 
     def apply_action(self, match: Match, agent_id: str, action: Action) -> ActionResult:
-        if match.game_id != "split100":
-            return action_error(ActionError.MATCH_NOT_RUNNING, "Not a split100 match")
+        if match.game_id != "fair-split":
+            return action_error(ActionError.MATCH_NOT_RUNNING, "Not a fair-split match")
         if match.status != MatchStatus.RUNNING:
             return action_error(ActionError.MATCH_NOT_RUNNING, "Match is not running")
         phase = match.spec.phases[match.current_phase_index] if match.spec.phases else None

@@ -19,7 +19,7 @@ def _make_turn_state(allowed_actions: list[AllowedAction] | None = None) -> Turn
     actions = _DEFAULT_ALLOWED if allowed_actions is None else allowed_actions
     return TurnState(
         match_id="m1",
-        game_id="split100",
+        game_id="fair-split",
         agent_id="test_agent",
         phase="negotiation",
         is_my_turn=True,

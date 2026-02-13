@@ -25,6 +25,8 @@ class ExperimentConfig(BaseModel):
     max_messages_per_turn: int = Field(default=10, description="Max messages an agent can send per turn")
     log_directory: Path | None = Field(default=None, description="Directory to save match logs")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata")
+    open_dashboard: bool = Field(default=False, description="Open local dashboard in browser after run")
+    dashboard_port: int = Field(default=8765, description="Port for dashboard server")
 
 
 class MatchResult(BaseModel):
@@ -100,29 +102,90 @@ class ExperimentRunner:
 
         start_time = time.monotonic()
         match_results: list[MatchResult] = []
+        dashboard_thread = None
+        dashboard_state: dict[str, Any] | None = None
+
+        if self._config.open_dashboard:
+            from neg_env.experiment.dashboard import serve_realtime
+
+            dashboard_state = {
+                "config": self._config,
+                "match_results": [],
+                "status": "running",
+                "game_id": self._config.game_id,
+                "num_matches": self._config.num_matches,
+                "total_duration_seconds": 0.0,
+            }
+            dashboard_thread = serve_realtime(
+                dashboard_state,
+                port=self._config.dashboard_port,
+                open_browser=True,
+            )
+            port = self._config.dashboard_port
+            print(f"\n  Dashboard: http://127.0.0.1:{port}\n")
 
         for _ in range(self._config.num_matches):
-            mr = self._run_single_match(agents, spec)
+            mr = self._run_single_match(agents, spec, dashboard_state)
             match_results.append(mr)
+            if dashboard_state is not None:
+                dashboard_state["match_results"].append(mr.model_dump(mode="json"))
 
         total_duration = time.monotonic() - start_time
-        return ExperimentResult(
+        result = ExperimentResult(
             game_id=self._config.game_id,
             num_matches=self._config.num_matches,
             match_results=match_results,
             total_duration_seconds=total_duration,
         )
 
-    def _run_single_match(self, agents: list[Agent], spec: Any) -> MatchResult:
+        if dashboard_state is not None and dashboard_thread is not None:
+            dashboard_state["status"] = "finished"
+            dashboard_state["total_duration_seconds"] = total_duration
+            print(f"  Completion rate: {result.completion_rate:.0%}")
+            print(f"  Mean payoffs: {result.mean_payoffs}")
+            print(f"  Dashboard at http://127.0.0.1:{self._config.dashboard_port} (Ctrl+C to exit)\n")
+            dashboard_thread.join()
+        return result
+
+    def _push_live_event(
+        self,
+        dashboard_state: dict[str, Any] | None,
+        event_type: str,
+        agent_id: str | None = None,
+        **data: Any,
+    ) -> None:
+        if not dashboard_state:
+            return
+        current = dashboard_state.get("current_match")
+        if not current or "events" not in current:
+            return
+        current["events"].append({
+            "timestamp_ns": time.time_ns(),
+            "event_type": event_type,
+            "agent_id": agent_id,
+            "data": data,
+        })
+
+    def _run_single_match(
+        self, agents: list[Agent], spec: Any, dashboard_state: dict[str, Any] | None = None
+    ) -> MatchResult:
         """Run a single match to completion or max_turns."""
         match_id = uuid.uuid4().hex
         agent_ids = [a.agent_id for a in agents]
         agent_map = {a.agent_id: a for a in agents}
         match = create_match(match_id, self._config.game_id, spec, agent_ids)
 
+        if dashboard_state is not None:
+            dashboard_state["current_match"] = {
+                "match_id": match_id,
+                "agent_ids": agent_ids,
+                "events": [],
+            }
+
         logger = MatchLogger(match_id, self._config.game_id, agent_ids)
         logger.set_metadata(**self._config.metadata)
         logger.log_event("match_start")
+        self._push_live_event(dashboard_state, "match_start")
 
         for agent in agents:
             agent.on_match_start(match_id, self._config.game_id, agent_ids)
@@ -143,7 +206,6 @@ class ExperimentRunner:
 
                 response = agent.act(state)
 
-                # Apply messages (capped)
                 for msg in response.messages[: self._config.max_messages_per_turn]:
                     msg_result = apply_message(
                         match, current_agent_id, msg.scope.value, msg.content, msg.to_agent_ids or None
@@ -151,11 +213,28 @@ class ExperimentRunner:
                     if msg_result.ok:
                         message_count += 1
                     logger.log_messages(current_agent_id, [msg])
+                    self._push_live_event(
+                        dashboard_state,
+                        "message",
+                        agent_id=current_agent_id,
+                        scope=msg.scope.value,
+                        content=msg.content,
+                        to_agent_ids=msg.to_agent_ids or [],
+                    )
 
-                # Apply game action
                 action = response.action
                 result = apply_action(match, current_agent_id, action)
                 logger.log_action(current_agent_id, action.action_type, action.payload, result)
+                self._push_live_event(
+                    dashboard_state,
+                    "action",
+                    agent_id=current_agent_id,
+                    action_type=action.action_type,
+                    payload=action.payload,
+                    ok=result.ok,
+                    error=result.error,
+                    error_detail=result.error_detail,
+                )
 
                 turn_count += 1
         except Exception as e:
@@ -164,6 +243,9 @@ class ExperimentRunner:
         duration = time.monotonic() - start_time
         logger.set_outcome(match.outcome)
         logger.log_event("match_end", status=match.status.value)
+        self._push_live_event(dashboard_state, "match_end", status=match.status.value)
+        if dashboard_state is not None:
+            dashboard_state["current_match"] = None
 
         for agent in agents:
             agent.on_match_end(match_id, match.outcome)
