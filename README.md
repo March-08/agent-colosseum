@@ -1,9 +1,6 @@
 # neg-env — Multi-Agent Negotiation Environment
 
-A framework for running multi-agent negotiation and strategy games. Use it two ways:
-
-- **Python API** — run batch experiments with pluggable agents from a script. No server needed.
-- **MCP server** — connect AI clients (Cursor, Claude Desktop) for live interactive play.
+A research framework for running multi-agent negotiation and strategy games via a **Python API**. Run batch experiments with pluggable agents from a script — no server needed.
 
 Python 3.10+.
 
@@ -13,19 +10,44 @@ Python 3.10+.
 pip install -e .
 ```
 
-## Quick start (Python API)
+## Quick start
 
-Run 100 matches of Split $100 between two random agents in four lines:
+Run 100 matches of unfair-split between two random agents:
 
 ```python
 from neg_env import RandomAgent, ExperimentRunner, ExperimentConfig
 
-config = ExperimentConfig(game_id="fair-split", num_matches=100)
+config = ExperimentConfig(game_id="unfair-split", num_matches=100)
 agents = [RandomAgent(agent_id="alice", seed=42), RandomAgent(agent_id="bob", seed=43)]
 result = ExperimentRunner(config).run(agents)
 
 print(f"Completion rate: {result.completion_rate:.0%}")
 print(f"Mean payoffs: {result.mean_payoffs}")
+```
+
+## Available games
+
+### Unfair split (`unfair-split`)
+
+Two agents (proposer A, responder B) negotiate how to split resource R (default $100).
+
+Each agent has a **private reservation value** v drawn uniformly from \[0, R/2\]. The reservation value represents the minimum amount needed for the deal to be worthwhile. Payoff on agreement: **u = x − v**, where x is the agent's share. If no agreement is reached within the round limit (default 10), both agents receive 0.
+
+**Actions:**
+- `submit_offer` — propose a split: `{"my_share": 60}` (0 to R)
+- `accept` — accept the other agent's offer (ends the match)
+- `reject` — reject and pass the turn for a counter-offer
+- `pass` — hand the turn to the other agent (optionally send a message)
+- `message_only` — send messages without advancing the turn
+
+**Configuration:**
+```python
+from neg_env.games.fair_split import FairSplitGame
+from neg_env.games import register_game
+
+# Custom resource amount and round limit
+game = FairSplitGame(total=200, max_rounds=20)
+register_game(game)
 ```
 
 ## Writing a custom agent
@@ -36,7 +58,7 @@ Subclass `Agent` and implement two things: `agent_id` (property) and `act(state)
 from neg_env import Agent, Action, AgentResponse, TurnState, MessageIntent
 from neg_env.types import MessageScope
 
-class FairSplitAgent(Agent):
+class FairAgent(Agent):
     """Always proposes a 50/50 split; accepts any offer >= 40."""
 
     def __init__(self, name: str):
@@ -72,8 +94,8 @@ Then run it:
 ```python
 from neg_env import ExperimentRunner, ExperimentConfig, RandomAgent
 
-result = ExperimentRunner(ExperimentConfig(game_id="fair-split", num_matches=50)).run(
-    [FairSplitAgent("fair"), RandomAgent(agent_id="random", seed=1)]
+result = ExperimentRunner(ExperimentConfig(game_id="unfair-split", num_matches=50)).run(
+    [FairAgent("fair"), RandomAgent(agent_id="random", seed=1)]
 )
 print(result.mean_payoffs)
 ```
@@ -100,7 +122,7 @@ Each turn, the current agent receives a `TurnState` and returns an `AgentRespons
 - `match_id`, `game_id`, `agent_id` — identifiers
 - `phase` — current game phase name
 - `is_my_turn` — whether you can act
-- `game_state` — game-specific dict (e.g. `{"total": 100, "current_offer": 60, "last_offer_by": "alice"}`)
+- `game_state` — game-specific dict (e.g. `{"total": 100, "current_offer": 60, "last_offer_by": "alice", "my_reservation_value": 12.5}`)
 - `messages` — chat history visible to this agent
 - `allowed_actions` — list of `AllowedAction` (action_type + payload_schema)
 - `game_over`, `outcome` — set when the match ends
@@ -125,11 +147,11 @@ from pathlib import Path
 from neg_env import ExperimentConfig
 
 config = ExperimentConfig(
-    game_id="fair-split",          # which game to play
-    num_matches=100,             # how many matches to run
-    max_turns_per_match=200,     # abort match after this many turns (default: 200)
-    max_messages_per_turn=10,    # cap messages per agent per turn (default: 10)
-    log_directory=Path("./logs"),  # save JSON logs per match (optional)
+    game_id="unfair-split",        # which game to play
+    num_matches=100,               # how many matches to run
+    max_turns_per_match=200,       # abort match after this many turns (default: 200)
+    max_messages_per_turn=10,      # cap messages per agent per turn (default: 10)
+    log_directory=Path("./logs"),   # save JSON logs per match (optional)
     metadata={"experiment": "baseline"},  # arbitrary metadata attached to logs
 )
 ```
@@ -173,111 +195,12 @@ for event in log.events:
 
 | Agent | Description |
 |-------|-------------|
-| `RandomAgent(agent_id, seed)` | Picks a random allowed action with a valid random payload. Seeded for reproducibility. |
-| `OpenRouterNegotiationAgent(agent_id, api_key=..., model=...)` | LLM agent via OpenRouter (e.g. GPT). Sends a short negotiation message each turn then chooses submit_offer/accept/reject. Set `OPENROUTER_API_KEY` or pass `api_key`. Default model: `openai/gpt-4o-mini`. |
-| `LangChainNegotiationAgent(agent_id, runnable=..., model=...)` | Same negotiation behaviour using LangChain. Install with `pip install neg-env[langchain]`. Uses a default prompt+ChatOpenAI chain, or pass your own runnable (input: `{"system","user"}`, output: string). Requires `OPENAI_API_KEY` unless you pass a custom runnable. |
-| `LLMNegotiationBase` | Abstract base for custom framework agents: implement `_invoke_llm(system_prompt, user_content) -> str` and use helpers in `neg_env.agents.negotiation_llm` to parse and build `AgentResponse`. |
+| `RandomAgent(agent_id, seed)` | Picks a random allowed action. For tests and quick runs. |
+| `LangChainNegotiationAgent(agent_id, system_prompt=..., provider=..., model=...)` | Game-agnostic LLM agent. You supply `system_prompt` (rules, actions, output format) for the game; the agent gets state and allowed actions from the runner. Supports `provider="openai"` or `"openrouter"`; keys from `.env` (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`). Install: `pip install neg-env[langchain]`. |
 
-## Available games
+## Dashboard
 
-### Split $100 (`fair-split`)
-
-Two agents negotiate how to split $100 via alternating offers.
-
-**Actions:**
-- `submit_offer` — propose a split: `{"my_share": 60}` (0-100)
-- `accept` — accept the other agent's offer (ends the match)
-- `reject` — reject and pass the turn for a counter-offer
-
-**Outcome:** on agreement, payoffs reflect the accepted offer. If max rounds (10) are exceeded, both agents get 0.
-
-### Simple Auction (`auction`)
-
-N-agent sealed-bid auction (stub — spec defined, logic not yet implemented).
-
-## MCP server (interactive play)
-
-For live play with AI clients, run the MCP server. This is a separate interface from the Python API.
-
-### One server, many clients
-
-You run **one** neg-env server. **Multiple MCP clients** connect to create matches, join games, and play. The server holds all match state.
-
-- **SSE (default)**: listens on `http://127.0.0.1:8000`. All clients connect to that URL. One process, shared matches.
-- **stdio**: the client spawns the server as a subprocess. One process per client.
-
-### Run the server
-
-```bash
-# SSE (recommended for multi-agent play)
-python -m neg_env
-# Or: python -m neg_env --transport sse --host 127.0.0.1 --port 8000
-
-# stdio (for single-client tools like Cursor)
-python -m neg_env --transport stdio
-```
-
-### Connect Cursor (SSE)
-
-1. Start the server in a terminal (leave it running).
-2. In Cursor: **Settings > Features > MCP** (or **Settings > MCP**).
-3. Click **Add new MCP server**.
-4. Set **Type** to **SSE**, **Server URL** to `http://127.0.0.1:8000/sse`.
-
-Or edit `mcp.json` directly:
-
-```json
-{
-  "mcpServers": {
-    "neg-env": {
-      "url": "http://127.0.0.1:8000/sse"
-    }
-  }
-}
-```
-
-### Connect Claude Desktop (SSE via mcp-remote)
-
-Claude Desktop requires a command. Use the mcp-remote bridge to connect to the same SSE server:
-
-```json
-{
-  "mcpServers": {
-    "neg-env": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/sse"]
-    }
-  }
-}
-```
-
-Requires Node.js/npx. Cursor (direct SSE) and Claude (via mcp-remote) can share the same server and play the same match.
-
-### Connect Cursor (stdio)
-
-```json
-{
-  "mcpServers": {
-    "neg-env": {
-      "command": "python",
-      "args": ["-m", "neg_env", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-### MCP tools
-
-| Tool | Description |
-|------|-------------|
-| `list_games` | List available game ids |
-| `get_game_rules` | Get spec for a game by id |
-| `start_game` | Create a new match; returns match_id + agent_id |
-| `join_game` | Join an existing match by invite code |
-| `get_turn_state` | Get current state, messages, and allowed actions |
-| `send_public_message` | Send a message visible to all agents |
-| `send_private_message` | Send a message to specific agents |
-| `perform_action` | Perform a game action (submit_offer, accept, etc.) |
+When running experiments, set `open_dashboard=True` in `ExperimentConfig` to open a live browser dashboard showing match progress and results in real time.
 
 ## Tests
 
@@ -285,15 +208,6 @@ Requires Node.js/npx. Cursor (direct SSE) and Claude (via mcp-remote) can share 
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
-
-| Test file | What it covers |
-|-----------|---------------|
-| `test_core.py` | Match runner, create_match, get_turn_state, apply_message |
-| `test_game_fair_split.py` | Fair-split game flow (offer, accept, reject, error codes) |
-| `test_agents.py` | Agent base class, RandomAgent |
-| `test_logging.py` | MatchLogger save/load, event logging |
-| `test_experiment.py` | ExperimentRunner, batch matches, payoff stats |
-| `test_server_mcp.py` | MCP tool definitions |
 
 ## Project layout
 
@@ -303,9 +217,9 @@ src/neg_env/
   types.py             Core types (Action, TurnState, ActionResult, AgentResponse, ...)
   spec/                Game spec schema (GameSpec, Phase, TurnOrder, ...)
   core/                Match runner and match state
-  games/               Game implementations (fair-split, auction) + registry
-  agents/              Agent base class + RandomAgent
+  games/               Game implementations (unfair-split) + registry
+  agents/              Agent base class + RandomAgent + LangChainNegotiationAgent
   logging/             Match event logger (JSON logs)
   experiment/          ExperimentRunner for batch experiments
-  server/              MCP server and tool handlers
+  prompts/             System prompts for LLM agents
 ```

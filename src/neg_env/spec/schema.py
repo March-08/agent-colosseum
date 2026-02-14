@@ -41,8 +41,6 @@ class Phase(BaseModel):
         description="Action type names allowed in this phase (e.g. send_public_message, place_bid)",
     )
     max_rounds: int | None = Field(default=None, description="If round-based, max rounds (None = unbounded)")
-    duration_seconds: float | None = Field(default=None, description="If time-based, max duration (None = unbounded)")
-    max_actions_per_turn: int = Field(default=1, description="1 = exactly one action per turn; >1 = e.g. message + game action")
 
 
 class GameSpec(BaseModel):
@@ -56,5 +54,3 @@ class GameSpec(BaseModel):
     action_types: list[ActionTypeDef] = Field(default_factory=list, description="All action types used in this game")
     outcome_rule: OutcomeRule = Field(..., description="How outcome is determined")
     initial_game_state: dict[str, Any] = Field(default_factory=dict, description="Initial state (game-specific)")
-    allow_public_messages: bool = Field(default=True, description="Whether send_public_message is ever allowed")
-    allow_private_messages: bool = Field(default=True, description="Whether send_private_message is ever allowed")

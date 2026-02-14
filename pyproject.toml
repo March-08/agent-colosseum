@@ -5,17 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "neg-env"
 version = "0.1.0"
-description = "Negotiation environment: MCP server for multi-agent bargaining and strategy games"
+description = "Negotiation environment: framework for multi-agent bargaining and strategy games"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.0",
     "python-dotenv>=1.0",
-    "httpx>=0.28",
-    "mcp>=1.0",
     "starlette>=0.27",
     "uvicorn>=0.30",
-    "sse-starlette>=2.0",
 ]
 
 [project.optional-dependencies]

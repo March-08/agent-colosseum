@@ -29,8 +29,6 @@ class RandomAgent(Agent):
         """Generate a valid random payload for known action types."""
         if action_type == "submit_offer":
             return {"my_share": round(self._rng.uniform(0, 100), 2)}
-        if action_type in ("accept", "reject", "noop"):
+        if action_type in ("accept", "reject", "pass", "message_only", "noop"):
             return {}
-        if action_type == "place_bid":
-            return {"amount": round(self._rng.uniform(0, 100), 2)}
         return {}

@@ -32,7 +32,7 @@ def _payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
         if m.get("outcome") and "payoffs" in (m.get("outcome") or {}):
             for p in (m["outcome"] or {}).get("payoffs", []):
                 aid = p.get("agent_id", "")
-                payoffs.setdefault(aid, []).append(float(p.get("value", 0)))
+                payoffs.setdefault(aid, []).append(float(p.get("utility", p.get("value", 0))))
     mean_payoffs = {aid: sum(v) / len(v) for aid, v in payoffs.items() if v}
     result_dict = {
         "game_id": game_id,

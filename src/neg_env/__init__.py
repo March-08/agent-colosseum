@@ -1,4 +1,4 @@
-"""Negotiation environment: MCP server for multi-agent bargaining and strategy games."""
+"""Negotiation environment: framework for multi-agent bargaining and strategy games."""
 
 __version__ = "0.1.0"
 
@@ -6,7 +6,7 @@ __version__ = "0.1.0"
 from neg_env.types import Action, ActionResult, AgentResponse, MessageIntent, TurnState
 
 # Agent abstractions
-from neg_env.agents import Agent, LLMNegotiationBase, OpenRouterNegotiationAgent, RandomAgent
+from neg_env.agents import Agent, RandomAgent
 try:
     from neg_env.agents import LangChainNegotiationAgent  # noqa: F401
 except ImportError:
@@ -28,8 +28,6 @@ __all__ = [
     # Agents
     "Agent",
     "LangChainNegotiationAgent",
-    "LLMNegotiationBase",
-    "OpenRouterNegotiationAgent",
     "RandomAgent",
     # Experiment
     "ExperimentConfig",

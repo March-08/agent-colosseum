@@ -1,5 +1,6 @@
-"""Fair-split game: two agents negotiate how to split 100; alternating offers."""
+"""Unfair-split game: two agents negotiate how to split R; private reservation values vA, vB; payoff u = x − v."""
 
+import random
 from neg_env.core.match import Match, MatchStatus
 from neg_env.spec import ActionTypeDef, GameSpec, OutcomeRule, Phase, TurnOrder
 from neg_env.types import (
@@ -41,37 +42,75 @@ def _build_allowed_actions(spec: GameSpec, phase_name: str, is_my_turn: bool) ->
     ]
 
 
+GAME_ID = "unfair-split"
+
+
 class FairSplitGame(Game):
-    """Two agents split $100; alternating offers, accept/reject."""
+    """Unfair-split: proposer A and responder B negotiate how to split resource R.
+
+    Each agent has a private reservation value v drawn uniformly from [0, R/2].
+    Payoff on agreement: u_i = x_i − v_i, where x_i is agent i's share.
+    If no agreement is reached within max_rounds, both agents receive 0.
+    """
+
+    def __init__(self, *, total: int = 100, max_rounds: int = 10) -> None:
+        self._total = total
+        self._max_rounds = max_rounds
 
     def spec(self) -> GameSpec:
         return GameSpec(
-            game_id="fair-split",
-            name="Fair split",
+            game_id=GAME_ID,
+            name="Unfair split",
             min_agents=2,
-            description="Two agents must agree on how to split $100. Alternating offers; accept or counter.",
+            description=(
+                f"Two agents (proposer A, responder B) negotiate how to split resource R={self._total}. "
+                "Each agent has a private reservation value v drawn uniformly from [0, R/2]. "
+                "Alternating offers; accept or counter. "
+                "Payoff on agreement: u = x − v, where x is the agent's share. "
+                f"If no agreement within {self._max_rounds} rounds, both get 0."
+            ),
             phases=[
                 Phase(
                     name="negotiation",
                     turn_order=TurnOrder.ROUND_ROBIN,
-                    allowed_action_types=["send_public_message", "send_private_message", "submit_offer", "accept", "reject"],
-                    max_rounds=10,
-                    max_actions_per_turn=1,
+                    allowed_action_types=["send_public_message", "send_private_message", "submit_offer", "accept", "reject", "pass", "message_only"],
+                    max_rounds=self._max_rounds,
                 ),
             ],
             action_types=[
                 ActionTypeDef(name="submit_offer", description="Propose a split (e.g. my_share)", payload_schema={"my_share": {"type": "number"}}, is_message=False),
                 ActionTypeDef(name="accept", description="Accept current offer", payload_schema={}, is_message=False),
                 ActionTypeDef(name="reject", description="Reject current offer", payload_schema={}, is_message=False),
+                ActionTypeDef(name="pass", description="Only send messages this turn; pass the turn to the other agent", payload_schema={}, is_message=False),
+                ActionTypeDef(name="message_only", description="Only send messages; do not advance turn; other agent will be pinged to respond", payload_schema={}, is_message=False),
             ],
             outcome_rule=OutcomeRule.AGREEMENT,
-            initial_game_state={"total": 100, "current_offer": None, "last_offer_by": None},
-            allow_public_messages=True,
-            allow_private_messages=True,
+            initial_game_state={
+                "total": self._total,
+                "current_offer": None,
+                "last_offer_by": None,
+                "reservation_values": None,
+            },
         )
 
+    def _ensure_reservation_values(self, match: Match) -> None:
+        if match.game_state.get("reservation_values") is not None:
+            return
+        total = match.game_state.get("total", self._total)
+        rng = random.Random(f"{match.match_id}")
+        vals = [rng.uniform(0, total / 2) for _ in match.agent_ids]
+        match.game_state["reservation_values"] = dict(zip(match.agent_ids, vals))
+
+    def _visible_game_state(self, match: Match, agent_id: str) -> dict:
+        g = match.game_state
+        out = {"total": g.get("total", self._total), "current_offer": g.get("current_offer"), "last_offer_by": g.get("last_offer_by")}
+        rv = g.get("reservation_values")
+        if rv and agent_id in rv:
+            out["my_reservation_value"] = rv[agent_id]
+        return out
+
     def compute_turn_state(self, match: Match, agent_id: str) -> TurnState | None:
-        if match.game_id != "fair-split":
+        if match.game_id != GAME_ID:
             return None
         if match.status != MatchStatus.RUNNING:
             phase_name = "waiting_for_players"
@@ -83,12 +122,13 @@ class FairSplitGame(Game):
                 phase=phase_name,
                 is_my_turn=False,
                 current_turn_agent_id=only_agent,
-                game_state=dict(match.game_state),
+                game_state={},
                 messages=_messages_visible_to(match.messages, agent_id),
                 allowed_actions=[],
                 game_over=(match.status == MatchStatus.FINISHED),
                 outcome=match.outcome,
             )
+        self._ensure_reservation_values(match)
         phase = match.spec.phases[match.current_phase_index] if match.spec.phases else None
         phase_name = phase.name if phase else ""
         n = len(match.agent_ids)
@@ -109,12 +149,18 @@ class FairSplitGame(Game):
             phase=phase_name,
             is_my_turn=is_my_turn,
             current_turn_agent_id=current_turn_agent_id,
-            game_state=dict(match.game_state),
+            game_state=self._visible_game_state(match, agent_id),
             messages=messages,
             allowed_actions=allowed_actions,
             game_over=(match.status == MatchStatus.FINISHED),
             outcome=match.outcome,
         )
+
+    def _advance_turn_only(self, match: Match) -> None:
+        n = len(match.agent_ids)
+        if n == 0:
+            return
+        match.current_turn_index = (match.current_turn_index + 1) % n
 
     def _advance_turn_and_check_rounds(self, match: Match) -> None:
         n = len(match.agent_ids)
@@ -125,17 +171,15 @@ class FairSplitGame(Game):
             match.current_round += 1
         phase = match.spec.phases[match.current_phase_index] if match.spec.phases else None
         if phase and phase.max_rounds is not None and match.current_round >= phase.max_rounds:
-            total = match.game_state.get("total", 100)
             match.outcome = {
-                "payoffs": [{"agent_id": aid, "value": 0.0} for aid in match.agent_ids],
+                "payoffs": [{"agent_id": aid, "utility": 0.0} for aid in match.agent_ids],
                 "reason": "max_rounds_exceeded",
-                "total": total,
             }
             match.status = MatchStatus.FINISHED
 
     def apply_action(self, match: Match, agent_id: str, action: Action) -> ActionResult:
-        if match.game_id != "fair-split":
-            return action_error(ActionError.MATCH_NOT_RUNNING, "Not a fair-split match")
+        if match.game_id != GAME_ID:
+            return action_error(ActionError.MATCH_NOT_RUNNING, "Not an unfair-split match")
         if match.status != MatchStatus.RUNNING:
             return action_error(ActionError.MATCH_NOT_RUNNING, "Match is not running")
         phase = match.spec.phases[match.current_phase_index] if match.spec.phases else None
@@ -147,7 +191,7 @@ class FairSplitGame(Game):
         current_turn_agent_id = match.agent_ids[match.current_turn_index]
         if agent_id != current_turn_agent_id:
             return action_error(ActionError.NOT_YOUR_TURN, f"It is {current_turn_agent_id}'s turn")
-        total = match.game_state.get("total", 100)
+        total = match.game_state.get("total", self._total)
 
         if action.action_type == "submit_offer":
             my_share = action.payload.get("my_share")
@@ -167,22 +211,32 @@ class FairSplitGame(Game):
         if action.action_type == "accept":
             current_offer = match.game_state.get("current_offer")
             last_offer_by = match.game_state.get("last_offer_by")
+            rv = match.game_state.get("reservation_values") or {}
             if current_offer is None or last_offer_by is None:
                 return action_error(ActionError.GAME_RULE_VIOLATION, "No active offer to accept")
             if last_offer_by == agent_id:
                 return action_error(ActionError.GAME_RULE_VIOLATION, "Cannot accept your own offer")
-            payoffs = []
-            for aid in match.agent_ids:
-                if aid == last_offer_by:
-                    payoffs.append({"agent_id": aid, "value": float(current_offer)})
-                else:
-                    payoffs.append({"agent_id": aid, "value": float(total - current_offer)})
-            match.outcome = {"payoffs": payoffs, "reason": "agreement"}
+            x_proposer = float(current_offer)
+            x_responder = float(total - current_offer)
+            v_proposer = rv.get(last_offer_by, 0)
+            v_responder = rv.get(agent_id, 0)
+            payoffs = [
+                {"agent_id": aid, "utility": round((x_proposer if aid == last_offer_by else x_responder) - (v_proposer if aid == last_offer_by else v_responder), 2)}
+                for aid in match.agent_ids
+            ]
+            match.outcome = {"payoffs": payoffs, "reason": "agreement", "split": [x_proposer, x_responder]}
             match.status = MatchStatus.FINISHED
             return action_ok()
 
         if action.action_type == "reject":
             self._advance_turn_and_check_rounds(match)
+            return action_ok()
+
+        if action.action_type == "pass":
+            self._advance_turn_only(match)
+            return action_ok()
+
+        if action.action_type == "message_only":
             return action_ok()
 
         return action_error(ActionError.INVALID_ACTION_TYPE, f"Unknown action type: {action.action_type}")

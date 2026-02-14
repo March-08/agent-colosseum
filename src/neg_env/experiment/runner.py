@@ -13,7 +13,7 @@ from neg_env.core.runner import apply_action, apply_message, create_match, get_t
 from neg_env.games import get_game_spec
 from neg_env.games.builtins import ensure_builtins_registered
 from neg_env.logging.match_logger import MatchLog, MatchLogger
-from neg_env.types import Action
+from neg_env.types import Action, AllowedAction, action_ok
 
 
 class ExperimentConfig(BaseModel):
@@ -21,8 +21,25 @@ class ExperimentConfig(BaseModel):
 
     game_id: str = Field(..., description="Game to play")
     num_matches: int = Field(default=1, description="Number of matches to run")
-    max_turns_per_match: int = Field(default=200, description="Max turns before aborting a match")
-    max_messages_per_turn: int = Field(default=10, description="Max messages an agent can send per turn")
+    max_turns_per_match: int = Field(
+        default=20,
+        description=(
+            "Maximum number of turns allowed in a single match. "
+            "If this many turns occur without a resolution, the match will be aborted. "
+            "A turn typically consists of a single agent taking an action."
+        )
+    )
+    max_messages_per_turn: int = Field(
+        default=10,
+        description=(
+            "Maximum number of messages an agent can send during a single turn. "
+            "Prevents agents from flooding the environment with excessive communication in one turn."
+        )
+    )
+    max_message_pings: int = Field(
+        default=5,
+        description="When an agent uses message_only, max reply rounds from the other agent(s) before returning to the current agent.",
+    )
     log_directory: Path | None = Field(default=None, description="Directory to save match logs")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata")
     open_dashboard: bool = Field(default=False, description="Open local dashboard in browser after run")
@@ -60,7 +77,7 @@ class ExperimentResult(BaseModel):
             if mr.outcome and "payoffs" in mr.outcome:
                 for p in mr.outcome["payoffs"]:
                     aid = p["agent_id"]
-                    matrix.setdefault(aid, []).append(float(p["value"]))
+                    matrix.setdefault(aid, []).append(float(p.get("utility", p.get("value", 0))))
         return matrix
 
     @property
@@ -236,7 +253,98 @@ class ExperimentRunner:
                     error_detail=result.error_detail,
                 )
 
-                turn_count += 1
+                message_only_action = AllowedAction(
+                    action_type="message_only",
+                    description="Only send messages in response to new chat",
+                    payload_schema={},
+                )
+                ping_count = 0
+                other_ids = [a for a in agent_ids if a != current_agent_id]
+                while (
+                    match.status == MatchStatus.RUNNING
+                    and action.action_type == "message_only"
+                    and ping_count < self._config.max_message_pings
+                ):
+                    for other_id in other_ids:
+                        if match.status != MatchStatus.RUNNING:
+                            break
+                        state_other = get_turn_state(match, other_id)
+                        if state_other is None:
+                            continue
+                        state_other = state_other.model_copy(
+                            update={"allowed_actions": [message_only_action]}
+                        )
+                        resp = agent_map[other_id].act(state_other)
+                        for msg in resp.messages[: self._config.max_messages_per_turn]:
+                            msg_result = apply_message(
+                                match, other_id, msg.scope.value, msg.content, msg.to_agent_ids or None
+                            )
+                            if msg_result.ok:
+                                message_count += 1
+                            logger.log_messages(other_id, [msg])
+                            self._push_live_event(
+                                dashboard_state,
+                                "message",
+                                agent_id=other_id,
+                                scope=msg.scope.value,
+                                content=msg.content,
+                                to_agent_ids=msg.to_agent_ids or [],
+                            )
+                        act_other = resp.action
+                        if act_other.action_type != "message_only":
+                            act_other = Action(action_type="message_only", payload={})
+                        apply_action(match, other_id, act_other)
+                        logger.log_action(
+                            other_id, act_other.action_type, act_other.payload, action_ok()
+                        )
+                        self._push_live_event(
+                            dashboard_state,
+                            "action",
+                            agent_id=other_id,
+                            action_type=act_other.action_type,
+                            payload=act_other.payload,
+                            ok=True,
+                            error=None,
+                            error_detail=None,
+                        )
+                    ping_count += 1
+                    state = get_turn_state(match, current_agent_id)
+                    if state is None:
+                        break
+                    response = agent.act(state)
+                    for msg in response.messages[: self._config.max_messages_per_turn]:
+                        msg_result = apply_message(
+                            match, current_agent_id, msg.scope.value, msg.content, msg.to_agent_ids or None
+                        )
+                        if msg_result.ok:
+                            message_count += 1
+                        logger.log_messages(current_agent_id, [msg])
+                        self._push_live_event(
+                            dashboard_state,
+                            "message",
+                            agent_id=current_agent_id,
+                            scope=msg.scope.value,
+                            content=msg.content,
+                            to_agent_ids=msg.to_agent_ids or [],
+                        )
+                    action = response.action
+                    result = apply_action(match, current_agent_id, action)
+                    logger.log_action(current_agent_id, action.action_type, action.payload, result)
+                    self._push_live_event(
+                        dashboard_state,
+                        "action",
+                        agent_id=current_agent_id,
+                        action_type=action.action_type,
+                        payload=action.payload,
+                        ok=result.ok,
+                        error=result.error,
+                        error_detail=result.error_detail,
+                    )
+                    if action.action_type != "message_only":
+                        break
+
+                if action.action_type not in ("pass", "message_only"):
+                    turn_count += 1
         except Exception as e:
             error_str = str(e)
 

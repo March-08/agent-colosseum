@@ -2,4 +2,5 @@
 
 from neg_env.prompts.fair_split import SYSTEM_PROMPT_FAIR, SYSTEM_PROMPT_UNFAIR
 
+
 __all__ = ["SYSTEM_PROMPT_FAIR", "SYSTEM_PROMPT_UNFAIR"]

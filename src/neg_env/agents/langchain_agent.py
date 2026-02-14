@@ -1,56 +1,96 @@
-"""LangChain-based negotiation agent. Install with: pip install neg-env[langchain]."""
+"""Game-agnostic LLM agent. Uses system_prompt (researcher-defined) and TurnState. Supports OpenAI and OpenRouter. Install: pip install neg-env[langchain]."""
 
-from typing import Any
+import json
+import os
+import re
+from typing import Any, Literal
 
 from neg_env.agents.base import Agent
-from neg_env.agents.negotiation_llm import (
-    fallback_action,
-    parsed_to_agent_response,
-    parse_llm_response,
-    state_to_user_content,
-)
-from neg_env.prompts.fair_split import SYSTEM_PROMPT_FAIR
 from neg_env.types import Action, AgentResponse, MessageIntent, MessageScope, TurnState
 
 
-def _default_chain(model: str, temperature: float, api_key: str | None):
+def _state_to_user_content(state: TurnState) -> str:
+    """Serialize turn state for any game: game_state, messages, allowed_actions."""
+    lines = [
+        f"game_id={state.game_id} phase={state.phase} agent_id={state.agent_id}",
+        f"game_state: {json.dumps(state.game_state)}",
+    ]
+    if state.messages:
+        msg_lines = [f"{'you' if m.sender_id == state.agent_id else m.sender_id}: {m.content}" for m in state.messages]
+        lines.append("messages:\n" + "\n".join(msg_lines))
+    actions_desc = [f"{a.action_type}" + (f" ({a.description})" if a.description else "") for a in state.allowed_actions]
+    lines.append("allowed_actions: " + ", ".join(actions_desc))
+    lines.append('Reply with JSON only: {"message": "optional text or empty string", "action": "<action_type>", "payload": {...}}')
+    return "\n".join(lines)
+
+
+def _parse_llm_response(text: str) -> dict[str, Any]:
+    m = re.search(r"\{[\s\S]*\}", text.strip())
+    if not m:
+        return {"message": "", "action": "", "payload": {}}
+    try:
+        d = json.loads(m.group())
+        payload = dict(d.get("payload") or {})
+        if "my_share" in d:
+            payload["my_share"] = d["my_share"]
+        return {"message": d.get("message", "") or "", "action": d.get("action", "") or "", "payload": payload}
+    except json.JSONDecodeError:
+        return {"message": "", "action": "", "payload": {}}
+
+
+def _to_response(state: TurnState, parsed: dict[str, Any]) -> AgentResponse:
+    allowed = {a.action_type for a in state.allowed_actions}
+    action_type = (parsed.get("action") or "").strip()
+    if action_type not in allowed:
+        action_type = next(iter(allowed), "noop")
+    msg = (parsed.get("message") or "").strip()
+    return AgentResponse(
+        messages=[MessageIntent(scope=MessageScope.PUBLIC, content=msg)] if msg else [],
+        action=Action(action_type=action_type, payload=parsed.get("payload") or {}),
+    )
+
+
+def _fallback_action(state: TurnState) -> Action:
+    a = next(iter(state.allowed_actions), None)
+    return Action(action_type=a.action_type, payload={}) if a else Action(action_type="noop", payload={})
+
+
+def _make_chain(provider: Literal["openai", "openrouter"], model: str, temperature: float, api_key: str | None):
     from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_core.output_parsers import StrOutputParser
     from langchain_core.runnables import RunnableLambda
     from langchain_openai import ChatOpenAI
 
-    llm = ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        api_key=api_key,
-    )
-
+    key = (api_key or os.environ.get("OPENROUTER_API_KEY") if provider == "openrouter" else api_key or os.environ.get("OPENAI_API_KEY"))
+    llm = ChatOpenAI(model=model, temperature=temperature, api_key=key, base_url="https://openrouter.ai/api/v1" if provider == "openrouter" else None)
     def run(inp: dict[str, str]) -> str:
-        out = llm.invoke(
-            [SystemMessage(content=inp["system"]), HumanMessage(content=inp["user"])]
-        )
+        out = llm.invoke([SystemMessage(content=inp["system"]), HumanMessage(content=inp["user"])])
         return out.content if hasattr(out, "content") else str(out)
-
     return RunnableLambda(run)
 
 
+# Default prompt: researcher should override with game-specific prompt
+DEFAULT_SYSTEM_PROMPT = """You are an agent in a multi-agent game. You receive the current game state, message history, and allowed actions. Respond with valid JSON only: {"message": "optional short message to others", "action": "<one of the allowed action types>", "payload": {}}."""
+
+
 class LangChainNegotiationAgent(Agent):
-    """Negotiation agent using a LangChain runnable. Uses default prompt+LLM chain if runnable not provided."""
+    """Game-agnostic LLM agent. Researcher provides system_prompt for the game; keys from .env."""
 
     def __init__(
         self,
-        agent_id: str = "langchain",
+        agent_id: str = "llm",
         *,
         system_prompt: str | None = None,
         runnable: Any = None,
-        model: str = "gpt-4o-mini",
+        provider: Literal["openai", "openrouter"] = "openai",
+        model: str | None = None,
         temperature: float = 0.4,
         api_key: str | None = None,
     ) -> None:
         self._agent_id = agent_id
-        self._system_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT_FAIR
+        self._system_prompt = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
         self._runnable = runnable
-        self._model = model
+        self._provider = provider
+        self._model = model or ("gpt-4o-mini" if provider == "openai" else "openai/gpt-4o-mini")
         self._temperature = temperature
         self._api_key = api_key
 
@@ -58,30 +98,17 @@ class LangChainNegotiationAgent(Agent):
     def agent_id(self) -> str:
         return self._agent_id
 
-    def _get_runnable(self):
-        if self._runnable is not None:
-            return self._runnable
-        import os
-
-        key = self._api_key or os.environ.get("OPENAI_API_KEY")
-        return _default_chain(self._model, self._temperature, key)
-
     def act(self, state: TurnState) -> AgentResponse:
         if not state.allowed_actions:
             return AgentResponse(action=Action(action_type="noop", payload={}))
-
-        user_content = state_to_user_content(state)
-        inp = {"system": self._system_prompt, "user": user_content}
-
+        user = _state_to_user_content(state)
         try:
-            runnable = self._get_runnable()
-            out = runnable.invoke(inp)
+            chain = self._runnable or _make_chain(self._provider, self._model, self._temperature, self._api_key)
+            out = chain.invoke({"system": self._system_prompt, "user": user})
             text = out if isinstance(out, str) else getattr(out, "content", str(out))
+            return _to_response(state, _parse_llm_response(text))
         except Exception as e:
             return AgentResponse(
                 messages=[MessageIntent(scope=MessageScope.PUBLIC, content=f"(Error: {e})")],
-                action=fallback_action(state),
+                action=_fallback_action(state),
             )
-
-        parsed = parse_llm_response(text)
-        return parsed_to_agent_response(state, parsed)
