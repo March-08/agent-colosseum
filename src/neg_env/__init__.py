@@ -18,6 +18,9 @@ from neg_env.experiment import ExperimentConfig, ExperimentResult, ExperimentRun
 # Game registry
 from neg_env.games import get_game_spec, list_game_ids, register_game
 
+# Built-in games
+from neg_env.games.fair_split import FairSplitGame
+
 __all__ = [
     # Types
     "Action",
@@ -37,4 +40,6 @@ __all__ = [
     "get_game_spec",
     "list_game_ids",
     "register_game",
+    # Games
+    "FairSplitGame",
 ]

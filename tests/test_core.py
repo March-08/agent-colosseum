@@ -16,7 +16,7 @@ def test_create_match_builds_match_with_spec_state():
     assert match.game_id == "unfair-split"
     assert match.status == MatchStatus.RUNNING
     assert match.agent_ids == ["agent_a", "agent_b"]
-    assert match.game_state == {"total": 100, "current_offer": None, "last_offer_by": None, "reservation_values": None}
+    assert match.game_state == {"total": 100, "current_offer": None, "last_offer_by": None, "reservation_values": None, "action_history": []}
     assert match.messages == []
     assert match.outcome is None
     assert match.current_phase_index == 0

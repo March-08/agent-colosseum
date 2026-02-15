@@ -9,12 +9,41 @@ from neg_env.agents.base import Agent
 from neg_env.types import Action, AgentResponse, MessageIntent, MessageScope, TurnState
 
 
+def _format_action_history(history: list[dict]) -> str:
+    """Format action_history entries grouped by round into a readable summary."""
+    if not history:
+        return ""
+    rounds: dict[int, list[str]] = {}
+    for entry in history:
+        r = entry.get("round", 0)
+        agent = entry.get("agent_id", "?")
+        action = entry.get("action", "?")
+        if action == "submit_offer":
+            desc = f"{agent} submitted offer (my_share={entry.get('my_share')})"
+        elif action == "accept":
+            desc = f"{agent} accepted"
+        elif action == "reject":
+            desc = f"{agent} rejected"
+        elif action == "message_only":
+            desc = f"{agent} [chat-only, no turn advance]"
+        else:
+            desc = f"{agent} {action}"
+        rounds.setdefault(r, []).append(desc)
+    lines = []
+    for r in sorted(rounds):
+        lines.append(f"  Round {r}: " + " → ".join(rounds[r]))
+    return "negotiation_history:\n" + "\n".join(lines)
+
+
 def _state_to_user_content(state: TurnState) -> str:
     """Serialize turn state for any game: game_state, messages, allowed_actions."""
     lines = [
         f"game_id={state.game_id} phase={state.phase} agent_id={state.agent_id}",
         f"game_state: {json.dumps(state.game_state)}",
     ]
+    action_history = state.game_state.get("action_history") if isinstance(state.game_state, dict) else None
+    if action_history:
+        lines.append(_format_action_history(action_history))
     if state.messages:
         msg_lines = [f"{'you' if m.sender_id == state.agent_id else m.sender_id}: {m.content}" for m in state.messages]
         lines.append("messages:\n" + "\n".join(msg_lines))

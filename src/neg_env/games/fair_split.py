@@ -53,9 +53,10 @@ class FairSplitGame(Game):
     If no agreement is reached within max_rounds, both agents receive 0.
     """
 
-    def __init__(self, *, total: int = 100, max_rounds: int = 10) -> None:
+    def __init__(self, *, total: int = 100, max_rounds: int = 10, reservation_values: dict[str, float] | None = None) -> None:
         self._total = total
         self._max_rounds = max_rounds
+        self._fixed_reservation_values = reservation_values
 
     def spec(self) -> GameSpec:
         return GameSpec(
@@ -90,11 +91,15 @@ class FairSplitGame(Game):
                 "current_offer": None,
                 "last_offer_by": None,
                 "reservation_values": None,
+                "action_history": [],
             },
         )
 
     def _ensure_reservation_values(self, match: Match) -> None:
         if match.game_state.get("reservation_values") is not None:
+            return
+        if self._fixed_reservation_values is not None:
+            match.game_state["reservation_values"] = dict(self._fixed_reservation_values)
             return
         total = match.game_state.get("total", self._total)
         rng = random.Random(f"{match.match_id}")
@@ -107,6 +112,7 @@ class FairSplitGame(Game):
         rv = g.get("reservation_values")
         if rv and agent_id in rv:
             out["my_reservation_value"] = rv[agent_id]
+        out["action_history"] = g.get("action_history", [])
         return out
 
     def compute_turn_state(self, match: Match, agent_id: str) -> TurnState | None:
@@ -205,6 +211,9 @@ class FairSplitGame(Game):
                 return action_error(ActionError.INVALID_PAYLOAD, f"my_share must be between 0 and {total}")
             match.game_state["current_offer"] = my_share
             match.game_state["last_offer_by"] = agent_id
+            match.game_state.setdefault("action_history", []).append(
+                {"agent_id": agent_id, "action": "submit_offer", "my_share": my_share, "round": match.current_round}
+            )
             self._advance_turn_and_check_rounds(match)
             return action_ok()
 
@@ -221,14 +230,24 @@ class FairSplitGame(Game):
             v_proposer = rv.get(last_offer_by, 0)
             v_responder = rv.get(agent_id, 0)
             payoffs = [
-                {"agent_id": aid, "utility": round((x_proposer if aid == last_offer_by else x_responder) - (v_proposer if aid == last_offer_by else v_responder), 2)}
+                {
+                    "agent_id": aid,
+                    "share": x_proposer if aid == last_offer_by else x_responder,
+                    "utility": round((x_proposer if aid == last_offer_by else x_responder) - (v_proposer if aid == last_offer_by else v_responder), 2),
+                }
                 for aid in match.agent_ids
             ]
+            match.game_state.setdefault("action_history", []).append(
+                {"agent_id": agent_id, "action": "accept", "round": match.current_round}
+            )
             match.outcome = {"payoffs": payoffs, "reason": "agreement", "split": [x_proposer, x_responder]}
             match.status = MatchStatus.FINISHED
             return action_ok()
 
         if action.action_type == "reject":
+            match.game_state.setdefault("action_history", []).append(
+                {"agent_id": agent_id, "action": "reject", "round": match.current_round}
+            )
             self._advance_turn_and_check_rounds(match)
             return action_ok()
 
@@ -237,6 +256,9 @@ class FairSplitGame(Game):
             return action_ok()
 
         if action.action_type == "message_only":
+            match.game_state.setdefault("action_history", []).append(
+                {"agent_id": agent_id, "action": "message_only", "round": match.current_round, "advances_turn": False}
+            )
             return action_ok()
 
         return action_error(ActionError.INVALID_ACTION_TYPE, f"Unknown action type: {action.action_type}")

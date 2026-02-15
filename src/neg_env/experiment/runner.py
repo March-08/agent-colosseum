@@ -10,10 +10,11 @@ from pydantic import BaseModel, Field
 from neg_env.agents.base import Agent
 from neg_env.core.match import MatchStatus
 from neg_env.core.runner import apply_action, apply_message, create_match, get_turn_state
-from neg_env.games import get_game_spec
+from neg_env.games import get_game_spec, register_game
+from neg_env.games.base import Game
 from neg_env.games.builtins import ensure_builtins_registered
 from neg_env.logging.match_logger import MatchLog, MatchLogger
-from neg_env.types import Action, AllowedAction, action_ok
+from neg_env.types import Action, AllowedAction
 
 
 class ExperimentConfig(BaseModel):
@@ -69,24 +70,46 @@ class ExperimentResult(BaseModel):
     match_results: list[MatchResult] = Field(default_factory=list)
     total_duration_seconds: float = 0.0
 
+    def _agreement_results(self) -> list["MatchResult"]:
+        """Matches that ended with an agreement (exclude no-deal)."""
+        return [
+            mr for mr in self.match_results
+            if mr.outcome and mr.outcome.get("reason") == "agreement"
+        ]
+
+    @property
+    def no_deal_count(self) -> int:
+        """Number of matches that ended without a deal."""
+        return len(self.match_results) - len(self._agreement_results())
+
     @property
     def payoff_matrix(self) -> dict[str, list[float]]:
-        """agent_id -> list of payoffs across matches."""
+        """agent_id -> list of payoffs across agreement matches only."""
         matrix: dict[str, list[float]] = {}
-        for mr in self.match_results:
-            if mr.outcome and "payoffs" in mr.outcome:
-                for p in mr.outcome["payoffs"]:
-                    aid = p["agent_id"]
-                    matrix.setdefault(aid, []).append(float(p.get("utility", p.get("value", 0))))
+        for mr in self._agreement_results():
+            for p in mr.outcome["payoffs"]:  # type: ignore[index]
+                aid = p["agent_id"]
+                matrix.setdefault(aid, []).append(float(p.get("utility", p.get("value", 0))))
         return matrix
 
     @property
     def mean_payoffs(self) -> dict[str, float]:
-        """agent_id -> mean payoff across matches."""
+        """agent_id -> mean payoff across agreement matches only."""
         return {
             aid: sum(vals) / len(vals) if vals else 0.0
             for aid, vals in self.payoff_matrix.items()
         }
+
+    @property
+    def mean_shares(self) -> dict[str, float]:
+        """agent_id -> mean share (deal amount) across agreement matches only."""
+        shares: dict[str, list[float]] = {}
+        for mr in self._agreement_results():
+            for p in mr.outcome["payoffs"]:  # type: ignore[index]
+                aid = p["agent_id"]
+                if "share" in p:
+                    shares.setdefault(aid, []).append(float(p["share"]))
+        return {aid: sum(v) / len(v) if v else 0.0 for aid, v in shares.items()}
 
     @property
     def completion_rate(self) -> float:
@@ -103,11 +126,21 @@ class ExperimentRunner:
     def __init__(self, config: ExperimentConfig) -> None:
         self._config = config
 
-    def run(self, agents: list[Agent]) -> ExperimentResult:
-        """Run the experiment: N matches with the given agents."""
+    def run(self, agents: list[Agent], game: Game | None = None) -> ExperimentResult:
+        """Run the experiment: N matches with the given agents.
+
+        Args:
+            agents: List of agents to play.
+            game: Optional Game instance with custom settings.
+                  If None, the default registered game for game_id is used.
+        """
         ensure_builtins_registered()
 
-        spec = get_game_spec(self._config.game_id)
+        if game is not None:
+            register_game(game)
+            spec = game.spec()
+        else:
+            spec = get_game_spec(self._config.game_id)
         if spec is None:
             raise ValueError(f"Unknown game: {self._config.game_id}")
 
@@ -158,8 +191,10 @@ class ExperimentRunner:
         if dashboard_state is not None and dashboard_thread is not None:
             dashboard_state["status"] = "finished"
             dashboard_state["total_duration_seconds"] = total_duration
-            print(f"  Completion rate: {result.completion_rate:.0%}")
-            print(f"  Mean payoffs: {result.mean_payoffs}")
+            deals = result.num_matches - result.no_deal_count
+            print(f"  Deals: {deals}/{result.num_matches}  No-deal: {result.no_deal_count}/{result.num_matches}")
+            print(f"  Mean shares (deal): {result.mean_shares}  (agreements only)")
+            print(f"  Mean utility (share - reservation): {result.mean_payoffs}  (agreements only)")
             print(f"  Dashboard at http://127.0.0.1:{self._config.dashboard_port} (Ctrl+C to exit)\n")
             dashboard_thread.join()
         return result
@@ -241,17 +276,18 @@ class ExperimentRunner:
 
                 action = response.action
                 result = apply_action(match, current_agent_id, action)
-                logger.log_action(current_agent_id, action.action_type, action.payload, result)
-                self._push_live_event(
-                    dashboard_state,
-                    "action",
-                    agent_id=current_agent_id,
-                    action_type=action.action_type,
-                    payload=action.payload,
-                    ok=result.ok,
-                    error=result.error,
-                    error_detail=result.error_detail,
-                )
+                if action.action_type != "message_only":
+                    logger.log_action(current_agent_id, action.action_type, action.payload, result)
+                    self._push_live_event(
+                        dashboard_state,
+                        "action",
+                        agent_id=current_agent_id,
+                        action_type=action.action_type,
+                        payload=action.payload,
+                        ok=result.ok,
+                        error=result.error,
+                        error_detail=result.error_detail,
+                    )
 
                 message_only_action = AllowedAction(
                     action_type="message_only",
@@ -294,19 +330,6 @@ class ExperimentRunner:
                         if act_other.action_type != "message_only":
                             act_other = Action(action_type="message_only", payload={})
                         apply_action(match, other_id, act_other)
-                        logger.log_action(
-                            other_id, act_other.action_type, act_other.payload, action_ok()
-                        )
-                        self._push_live_event(
-                            dashboard_state,
-                            "action",
-                            agent_id=other_id,
-                            action_type=act_other.action_type,
-                            payload=act_other.payload,
-                            ok=True,
-                            error=None,
-                            error_detail=None,
-                        )
                     ping_count += 1
                     state = get_turn_state(match, current_agent_id)
                     if state is None:
@@ -329,18 +352,18 @@ class ExperimentRunner:
                         )
                     action = response.action
                     result = apply_action(match, current_agent_id, action)
-                    logger.log_action(current_agent_id, action.action_type, action.payload, result)
-                    self._push_live_event(
-                        dashboard_state,
-                        "action",
-                        agent_id=current_agent_id,
-                        action_type=action.action_type,
-                        payload=action.payload,
-                        ok=result.ok,
-                        error=result.error,
-                        error_detail=result.error_detail,
-                    )
                     if action.action_type != "message_only":
+                        logger.log_action(current_agent_id, action.action_type, action.payload, result)
+                        self._push_live_event(
+                            dashboard_state,
+                            "action",
+                            agent_id=current_agent_id,
+                            action_type=action.action_type,
+                            payload=action.payload,
+                            ok=result.ok,
+                            error=result.error,
+                            error_detail=result.error_detail,
+                        )
                         break
 
                 if action.action_type not in ("pass", "message_only"):

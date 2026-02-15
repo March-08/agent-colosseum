@@ -7,7 +7,7 @@ from neg_env.types import Action
 
 
 def test_unfair_split_submit_offer_updates_game_state():
-    """submit_offer sets current_offer and last_offer_by, advances turn."""
+    """submit_offer sets current_offer, last_offer_by, and action_history; advances turn."""
     spec = get_game_spec("unfair-split")
     assert spec is not None
     match = create_match("m1", "unfair-split", spec, ["a", "b"])
@@ -16,6 +16,8 @@ def test_unfair_split_submit_offer_updates_game_state():
     assert match.game_state["current_offer"] == 60
     assert match.game_state["last_offer_by"] == "a"
     assert match.current_turn_index == 1
+    assert len(match.game_state["action_history"]) == 1
+    assert match.game_state["action_history"][0] == {"agent_id": "a", "action": "submit_offer", "my_share": 60.0, "round": 0}
     ts = get_turn_state(match, "b")
     assert ts is not None
     assert ts.is_my_turn is True
@@ -104,3 +106,29 @@ def test_unfair_split_not_your_turn_error():
     result = apply_action(match, "b", Action(action_type="submit_offer", payload={"my_share": 50}))
     assert result.ok is False
     assert result.error == "not_your_turn"
+
+
+def test_unfair_split_action_history_tracks_offers():
+    """submit_offer appends an entry to action_history with agent_id, action, my_share, round."""
+    spec = get_game_spec("unfair-split")
+    assert spec is not None
+    match = create_match("m1", "unfair-split", spec, ["a", "b"])
+    apply_action(match, "a", Action(action_type="submit_offer", payload={"my_share": 70}))
+    apply_action(match, "b", Action(action_type="submit_offer", payload={"my_share": 55}))
+    history = match.game_state["action_history"]
+    assert len(history) == 2
+    assert history[0] == {"agent_id": "a", "action": "submit_offer", "my_share": 70.0, "round": 0}
+    assert history[1] == {"agent_id": "b", "action": "submit_offer", "my_share": 55.0, "round": 0}
+
+
+def test_unfair_split_action_history_tracks_rejections():
+    """reject appends an entry to action_history with agent_id, action, round."""
+    spec = get_game_spec("unfair-split")
+    assert spec is not None
+    match = create_match("m1", "unfair-split", spec, ["a", "b"])
+    apply_action(match, "a", Action(action_type="submit_offer", payload={"my_share": 70}))
+    apply_action(match, "b", Action(action_type="reject", payload={}))
+    history = match.game_state["action_history"]
+    assert len(history) == 2
+    assert history[0]["action"] == "submit_offer"
+    assert history[1] == {"agent_id": "b", "action": "reject", "round": 0}

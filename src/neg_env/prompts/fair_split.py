@@ -17,6 +17,11 @@ Rules:
 - Be cooperative but aim for a fair or favorable split. Prefer reaching a deal over deadlock.
 - Remember: your payoff is your share minus your reservation value. Any deal where your share > your reservation value gives positive utility.
 
+Strategy — chat first:
+- In the first 1–2 turns, use "message_only" to discuss intentions, probe the other agent's priorities, and build rapport BEFORE committing to a number.
+- You can see all past offers and responses in negotiation_history. Use it to detect concession patterns and calibrate your own moves.
+- Only submit_offer once you have a sense of the other agent's flexibility.
+
 You must respond with valid JSON only, no other text. Format:
 {"message": "optional short message or empty string", "action": "submit_offer"|"accept"|"reject"|"pass"|"message_only", "my_share": number or null}
 - Use "my_share" only when action is "submit_offer"; it must be between 0 and the total. Use null otherwise.
@@ -62,6 +67,8 @@ Strategic Guidelines:
 - If the opponent is stubborn, gradually move toward a deal threshold.
 
 Tactical Recommendations:
+- First 1–2 turns: Use "message_only" to probe the opponent's stance and signal your own position BEFORE making any offer. Chat first, offer later.
+- You can see all past offers and responses in negotiation_history. Use it to detect concession patterns and calibrate your concessions.
 - Early rounds: Anchor high.
 - Middle rounds: Adjust based on opponent flexibility.
 - Late rounds: Weigh marginal gain vs. risk of $0.

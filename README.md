@@ -21,8 +21,9 @@ config = ExperimentConfig(game_id="unfair-split", num_matches=100)
 agents = [RandomAgent(agent_id="alice", seed=42), RandomAgent(agent_id="bob", seed=43)]
 result = ExperimentRunner(config).run(agents)
 
-print(f"Completion rate: {result.completion_rate:.0%}")
-print(f"Mean payoffs: {result.mean_payoffs}")
+print(f"Deals: {result.num_matches - result.no_deal_count}/{result.num_matches}")
+print(f"Mean shares (deal): {result.mean_shares}")
+print(f"Mean utility: {result.mean_payoffs}")
 ```
 
 ## Available games
@@ -40,14 +41,18 @@ Each agent has a **private reservation value** v drawn uniformly from \[0, R/2\]
 - `pass` — hand the turn to the other agent (optionally send a message)
 - `message_only` — send messages without advancing the turn
 
-**Configuration:**
-```python
-from neg_env.games.fair_split import FairSplitGame
-from neg_env.games import register_game
+**Game state** includes an `action_history` list tracking every offer, rejection, and acceptance — agents can inspect it to detect concession patterns and reason about negotiation trajectory.
 
-# Custom resource amount and round limit
+**Configuration** — pass a custom `FairSplitGame` instance to the runner:
+```python
+from neg_env import FairSplitGame, ExperimentRunner, ExperimentConfig
+
 game = FairSplitGame(total=200, max_rounds=20)
-register_game(game)
+result = ExperimentRunner(config).run(agents, game=game)
+
+# Pin reservation values for controlled experiments
+game = FairSplitGame(total=100, reservation_values={"alice": 10, "bob": 30})
+result = ExperimentRunner(config).run(agents, game=game)
 ```
 
 ## Writing a custom agent
@@ -122,7 +127,7 @@ Each turn, the current agent receives a `TurnState` and returns an `AgentRespons
 - `match_id`, `game_id`, `agent_id` — identifiers
 - `phase` — current game phase name
 - `is_my_turn` — whether you can act
-- `game_state` — game-specific dict (e.g. `{"total": 100, "current_offer": 60, "last_offer_by": "alice", "my_reservation_value": 12.5}`)
+- `game_state` — game-specific dict (e.g. `{"total": 100, "current_offer": 60, "last_offer_by": "alice", "my_reservation_value": 12.5, "action_history": [...]}`)
 - `messages` — chat history visible to this agent
 - `allowed_actions` — list of `AllowedAction` (action_type + payload_schema)
 - `game_over`, `outcome` — set when the match ends
@@ -161,16 +166,21 @@ config = ExperimentConfig(
 ```python
 result = ExperimentRunner(config).run(agents)
 
-# Aggregate stats
-result.completion_rate     # fraction of matches that finished (0.0 to 1.0)
-result.mean_payoffs        # {"alice": 52.3, "bob": 47.7}
+# Or with custom game settings
+result = ExperimentRunner(config).run(agents, game=FairSplitGame(total=200))
+
+# Aggregate stats (means only count agreement matches, no-deal excluded)
+result.no_deal_count       # how many matches ended without a deal
+result.mean_shares         # {"alice": 55.0, "bob": 45.0} — deal amounts
+result.mean_payoffs        # {"alice": 42.3, "bob": 32.7} — utility (share - reservation)
 result.payoff_matrix       # {"alice": [60, 50, ...], "bob": [40, 50, ...]}
+result.completion_rate     # fraction of matches that finished (0.0 to 1.0)
 result.total_duration_seconds
 
 # Per-match details
 for mr in result.match_results:
     mr.match_id
-    mr.outcome        # {"payoffs": [...], "reason": "agreement"}
+    mr.outcome        # {"payoffs": [{"agent_id": ..., "share": 60, "utility": 47.5}], "reason": "agreement"}
     mr.status         # "finished" or "running" (if aborted by max_turns)
     mr.num_turns
     mr.num_messages
@@ -200,7 +210,7 @@ for event in log.events:
 
 ## Dashboard
 
-When running experiments, set `open_dashboard=True` in `ExperimentConfig` to open a live browser dashboard showing match progress and results in real time.
+When running experiments, set `open_dashboard=True` in `ExperimentConfig` to open a live browser dashboard showing match progress and results in real time. The summary displays deals/no-deal counts, mean shares (deal amounts), and mean utility — all computed from agreement matches only.
 
 ## Tests
 
