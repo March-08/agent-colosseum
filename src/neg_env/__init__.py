@@ -20,6 +20,7 @@ from neg_env.games import get_game_spec, list_game_ids, register_game
 
 # Built-in games
 from neg_env.games.fair_split import FairSplitGame
+from neg_env.games.first_price_auction import FirstPriceAuctionGame
 
 __all__ = [
     # Types
@@ -42,4 +43,5 @@ __all__ = [
     "register_game",
     # Games
     "FairSplitGame",
+    "FirstPriceAuctionGame",
 ]

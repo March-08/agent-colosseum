@@ -70,23 +70,29 @@ class ExperimentResult(BaseModel):
     match_results: list[MatchResult] = Field(default_factory=list)
     total_duration_seconds: float = 0.0
 
-    def _agreement_results(self) -> list["MatchResult"]:
-        """Matches that ended with an agreement (exclude no-deal)."""
+    _RESOLVED_REASONS = {"agreement", "auction_resolved"}
+
+    def _resolved_results(self) -> list["MatchResult"]:
+        """Matches that ended with a resolution (agreement or auction resolved)."""
         return [
             mr for mr in self.match_results
-            if mr.outcome and mr.outcome.get("reason") == "agreement"
+            if mr.outcome and mr.outcome.get("reason") in self._RESOLVED_REASONS
         ]
+
+    def _agreement_results(self) -> list["MatchResult"]:
+        """Matches that ended with an agreement (exclude no-deal). Alias for backward compat."""
+        return self._resolved_results()
 
     @property
     def no_deal_count(self) -> int:
-        """Number of matches that ended without a deal."""
-        return len(self.match_results) - len(self._agreement_results())
+        """Number of matches that ended without a resolution."""
+        return len(self.match_results) - len(self._resolved_results())
 
     @property
     def payoff_matrix(self) -> dict[str, list[float]]:
-        """agent_id -> list of payoffs across agreement matches only."""
+        """agent_id -> list of payoffs across resolved matches only."""
         matrix: dict[str, list[float]] = {}
-        for mr in self._agreement_results():
+        for mr in self._resolved_results():
             for p in mr.outcome["payoffs"]:  # type: ignore[index]
                 aid = p["agent_id"]
                 matrix.setdefault(aid, []).append(float(p.get("utility", p.get("value", 0))))
@@ -94,7 +100,7 @@ class ExperimentResult(BaseModel):
 
     @property
     def mean_payoffs(self) -> dict[str, float]:
-        """agent_id -> mean payoff across agreement matches only."""
+        """agent_id -> mean payoff across resolved matches only."""
         return {
             aid: sum(vals) / len(vals) if vals else 0.0
             for aid, vals in self.payoff_matrix.items()
@@ -104,12 +110,27 @@ class ExperimentResult(BaseModel):
     def mean_shares(self) -> dict[str, float]:
         """agent_id -> mean share (deal amount) across agreement matches only."""
         shares: dict[str, list[float]] = {}
-        for mr in self._agreement_results():
+        for mr in self._resolved_results():
             for p in mr.outcome["payoffs"]:  # type: ignore[index]
                 aid = p["agent_id"]
                 if "share" in p:
                     shares.setdefault(aid, []).append(float(p["share"]))
         return {aid: sum(v) / len(v) if v else 0.0 for aid, v in shares.items()}
+
+    @property
+    def mean_bids(self) -> dict[str, float]:
+        """agent_id -> mean bid across resolved auction matches only."""
+        bids: dict[str, list[float]] = {}
+        for mr in self._resolved_results():
+            for p in mr.outcome["payoffs"]:  # type: ignore[index]
+                aid = p["agent_id"]
+                if "bid" in p:
+                    bids.setdefault(aid, []).append(float(p["bid"]))
+        return {aid: sum(v) / len(v) if v else 0.0 for aid, v in bids.items()}
+
+    @property
+    def is_auction(self) -> bool:
+        return self.game_id == "first-price-auction"
 
     @property
     def completion_rate(self) -> float:
@@ -191,10 +212,15 @@ class ExperimentRunner:
         if dashboard_state is not None and dashboard_thread is not None:
             dashboard_state["status"] = "finished"
             dashboard_state["total_duration_seconds"] = total_duration
-            deals = result.num_matches - result.no_deal_count
-            print(f"  Deals: {deals}/{result.num_matches}  No-deal: {result.no_deal_count}/{result.num_matches}")
-            print(f"  Mean shares (deal): {result.mean_shares}  (agreements only)")
-            print(f"  Mean utility (share - reservation): {result.mean_payoffs}  (agreements only)")
+            resolved = result.num_matches - result.no_deal_count
+            if result.is_auction:
+                print(f"  Resolved: {resolved}/{result.num_matches}  Timed out: {result.no_deal_count}/{result.num_matches}")
+                print(f"  Mean bids: {result.mean_bids}  (resolved only)")
+                print(f"  Mean utility (valuation - bid): {result.mean_payoffs}  (resolved only)")
+            else:
+                print(f"  Deals: {resolved}/{result.num_matches}  No-deal: {result.no_deal_count}/{result.num_matches}")
+                print(f"  Mean shares (deal): {result.mean_shares}  (agreements only)")
+                print(f"  Mean utility (share - reservation): {result.mean_payoffs}  (agreements only)")
             print(f"  Dashboard at http://127.0.0.1:{self._config.dashboard_port} (Ctrl+C to exit)\n")
             dashboard_thread.join()
         return result

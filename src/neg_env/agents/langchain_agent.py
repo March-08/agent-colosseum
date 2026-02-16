@@ -24,6 +24,8 @@ def _format_action_history(history: list[dict]) -> str:
             desc = f"{agent} accepted"
         elif action == "reject":
             desc = f"{agent} rejected"
+        elif action == "submit_bid":
+            desc = f"{agent} submitted a sealed bid"
         elif action == "message_only":
             desc = f"{agent} [chat-only, no turn advance]"
         else:

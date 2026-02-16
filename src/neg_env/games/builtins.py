@@ -10,6 +10,8 @@ def ensure_builtins_registered() -> None:
         return
     from neg_env.games import register_game
     from neg_env.games.fair_split import FairSplitGame
+    from neg_env.games.first_price_auction import FirstPriceAuctionGame
 
     register_game(FairSplitGame())
+    register_game(FirstPriceAuctionGame())
     _registered = True

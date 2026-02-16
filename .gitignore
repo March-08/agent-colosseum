@@ -27,7 +27,7 @@ venv/
 ENV/
 env/
 logs
-example.py
+example*.py
 # IDE
 .idea/
 .vscode/

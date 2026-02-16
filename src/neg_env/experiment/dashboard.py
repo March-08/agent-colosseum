@@ -27,19 +27,25 @@ def _payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     num_matches = state.get("num_matches", 0)
     finished = sum(1 for m in match_results if m.get("status") == "finished")
     completion_rate = finished / len(match_results) if match_results else 0.0
-    agreements = [m for m in match_results if m.get("outcome") and (m.get("outcome") or {}).get("reason") == "agreement"]
-    no_deal_count = len(match_results) - len(agreements)
+    resolved_reasons = {"agreement", "auction_resolved"}
+    resolved = [m for m in match_results if m.get("outcome") and (m.get("outcome") or {}).get("reason") in resolved_reasons]
+    no_deal_count = len(match_results) - len(resolved)
+    is_auction = game_id == "first-price-auction"
     payoffs: dict[str, list[float]] = {}
     shares: dict[str, list[float]] = {}
-    for m in agreements:
+    bids: dict[str, list[float]] = {}
+    for m in resolved:
         for p in (m["outcome"] or {}).get("payoffs", []):
             aid = p.get("agent_id", "")
             payoffs.setdefault(aid, []).append(float(p.get("utility", p.get("value", 0))))
             if "share" in p:
                 shares.setdefault(aid, []).append(float(p["share"]))
+            if "bid" in p:
+                bids.setdefault(aid, []).append(float(p["bid"]))
     mean_payoffs = {aid: sum(v) / len(v) for aid, v in payoffs.items() if v}
     mean_shares = {aid: sum(v) / len(v) for aid, v in shares.items() if v}
-    result_dict = {
+    mean_bids = {aid: sum(v) / len(v) for aid, v in bids.items() if v}
+    result_dict: dict[str, Any] = {
         "game_id": game_id,
         "num_matches": num_matches,
         "match_results": match_results,
@@ -47,9 +53,11 @@ def _payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
         "total_duration_seconds": total_duration,
         "completion_rate": completion_rate,
         "no_deal_count": no_deal_count,
-        "deal_count": len(agreements),
+        "deal_count": len(resolved),
         "mean_payoffs": mean_payoffs,
         "mean_shares": mean_shares,
+        "is_auction": is_auction,
+        "mean_bids": mean_bids,
     }
     return {"config": _serialize(config) if config else {}, "result": result_dict, "status": status}
 
@@ -77,6 +85,8 @@ def _build_app(config: ExperimentConfig, result: ExperimentResult) -> Starlette:
     result_dict["deal_count"] = result.num_matches - result.no_deal_count
     result_dict["mean_payoffs"] = result.mean_payoffs
     result_dict["mean_shares"] = result.mean_shares
+    result_dict["is_auction"] = result.is_auction
+    result_dict["mean_bids"] = result.mean_bids
     payload = {"config": _serialize(config), "result": result_dict, "status": "finished"}
 
     async def api_result(_request: Any) -> JSONResponse:
@@ -176,11 +186,21 @@ _HTML = """<!DOCTYPE html>
     (function() {
       fetch('/api/result').then(r => r.json()).then(data => {
         const root = document.getElementById('root');
+        var res = data.result || {};
+        var isAuction = res.is_auction;
+        var resolvedLabel = isAuction ? 'Resolved' : 'Deals';
+        var failLabel = isAuction ? 'Timed out' : 'No-deal';
+        var summaryExtra = '';
+        if (isAuction) {
+          if (res.mean_bids && Object.keys(res.mean_bids).length) { summaryExtra += '<div class="summary" style="margin-top:0.5rem"><span style="color:var(--muted)">Mean bids (resolved only):</span>' + Object.entries(res.mean_bids).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+          if (res.mean_payoffs && Object.keys(res.mean_payoffs).length) { summaryExtra += '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (valuation−bid, resolved only):</span>' + Object.entries(res.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+        } else {
+          if (res.mean_shares && Object.keys(res.mean_shares).length) { summaryExtra += '<div class="summary" style="margin-top:0.5rem"><span style="color:var(--muted)">Mean shares (deal, agreements only):</span>' + Object.entries(res.mean_shares).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+          if (res.mean_payoffs && Object.keys(res.mean_payoffs).length) { summaryExtra += '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (share−v, agreements only):</span>' + Object.entries(res.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+        }
         root.innerHTML = '<section><h2>Config</h2><pre>' + JSON.stringify(data.config || {}, null, 2) + '</pre></section>' +
-          '<section><h2>Summary</h2><div class="summary"><span>Deals: <strong>' + (data.result && data.result.deal_count != null ? data.result.deal_count + '/' + (data.result.num_matches || 0) : '–') + '</strong></span><span>No-deal: <strong>' + (data.result && data.result.no_deal_count != null ? data.result.no_deal_count + '/' + (data.result.num_matches || 0) : '–') + '</strong></span><span>Total duration: <strong>' + (data.result && data.result.total_duration_seconds != null ? data.result.total_duration_seconds.toFixed(2) + 's' : '–') + '</strong></span></div>' +
-          (data.result && data.result.mean_shares && Object.keys(data.result.mean_shares).length ? '<div class="summary" style="margin-top:0.5rem"><span style="color:var(--muted)">Mean shares (deal, agreements only):</span>' + Object.entries(data.result.mean_shares).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>' : '') +
-          (data.result && data.result.mean_payoffs && Object.keys(data.result.mean_payoffs).length ? '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (share−v, agreements only):</span>' + Object.entries(data.result.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>' : '') +
-          '</section>';
+          '<section><h2>Summary</h2><div class="summary"><span>' + resolvedLabel + ': <strong>' + (res.deal_count != null ? res.deal_count + '/' + (res.num_matches || 0) : '–') + '</strong></span><span>' + failLabel + ': <strong>' + (res.no_deal_count != null ? res.no_deal_count + '/' + (res.num_matches || 0) : '–') + '</strong></span><span>Total duration: <strong>' + (res.total_duration_seconds != null ? res.total_duration_seconds.toFixed(2) + 's' : '–') + '</strong></span></div>' +
+          summaryExtra + '</section>';
         const matches = (data.result && data.result.match_results) || [];
         const sec = document.createElement('section');
         sec.innerHTML = '<h2>Matches</h2>';
@@ -272,9 +292,17 @@ _HTML_POLLING = """<!DOCTYPE html>
       var matches = res.match_results || [], current = res.current_match;
       var html = '<section><h2>Status</h2><span class="badge ' + (status === 'running' ? 'badge-running' : 'badge-finished') + '">' + (status === 'running' ? 'Running…' : 'Finished') + '</span></section>';
       html += '<section><h2>Config</h2><pre>' + JSON.stringify({ game_id: cfg.game_id, num_matches: cfg.num_matches, max_turns_per_match: cfg.max_turns_per_match, max_messages_per_turn: cfg.max_messages_per_turn, log_directory: cfg.log_directory, metadata: cfg.metadata }, null, 2) + '</pre></section>';
-      html += '<section><h2>Summary</h2><div class="summary"><span>Deals: <strong>' + (res.deal_count != null ? res.deal_count + '/' + (res.num_matches || 0) : '–') + '</strong></span><span>No-deal: <strong>' + (res.no_deal_count != null ? res.no_deal_count + '/' + (res.num_matches || 0) : '–') + '</strong></span><span>Total duration: <strong>' + (res.total_duration_seconds != null ? res.total_duration_seconds.toFixed(2) + 's' : '–') + '</strong></span></div>';
-      if (res.mean_shares && Object.keys(res.mean_shares).length) { html += '<div class="summary" style="margin-top:0.5rem"><span style="color:var(--muted)">Mean shares (deal, agreements only):</span>' + Object.entries(res.mean_shares).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
-      if (res.mean_payoffs && Object.keys(res.mean_payoffs).length) { html += '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (share−v, agreements only):</span>' + Object.entries(res.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+      var isAuction = res.is_auction;
+      var resolvedLabel = isAuction ? 'Resolved' : 'Deals';
+      var failLabel = isAuction ? 'Timed out' : 'No-deal';
+      html += '<section><h2>Summary</h2><div class="summary"><span>' + resolvedLabel + ': <strong>' + (res.deal_count != null ? res.deal_count + '/' + (res.num_matches || 0) : '–') + '</strong></span><span>' + failLabel + ': <strong>' + (res.no_deal_count != null ? res.no_deal_count + '/' + (res.num_matches || 0) : '–') + '</strong></span><span>Total duration: <strong>' + (res.total_duration_seconds != null ? res.total_duration_seconds.toFixed(2) + 's' : '–') + '</strong></span></div>';
+      if (isAuction) {
+        if (res.mean_bids && Object.keys(res.mean_bids).length) { html += '<div class="summary" style="margin-top:0.5rem"><span style="color:var(--muted)">Mean bids (resolved only):</span>' + Object.entries(res.mean_bids).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+        if (res.mean_payoffs && Object.keys(res.mean_payoffs).length) { html += '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (valuation−bid, resolved only):</span>' + Object.entries(res.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+      } else {
+        if (res.mean_shares && Object.keys(res.mean_shares).length) { html += '<div class="summary" style="margin-top:0.5rem"><span style="color:var(--muted)">Mean shares (deal, agreements only):</span>' + Object.entries(res.mean_shares).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+        if (res.mean_payoffs && Object.keys(res.mean_payoffs).length) { html += '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (share−v, agreements only):</span>' + Object.entries(res.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
+      }
       html += '</section>';
       if (current && current.events && current.events.length >= 0) {
         html += '<section class="live-section"><h2>Current match (live)</h2><div class="match-body">';
