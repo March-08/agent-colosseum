@@ -1,0 +1,59 @@
+site_name: neg-env
+site_description: Multi-agent negotiation environment for research
+repo_url: https://github.com/marcellopoliti/agents-environment
+repo_name: marcellopoliti/agents-environment
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+  - Games:
+    - Overview: games/overview.md
+    - "Unfair Split": games/unfair-split.md
+    - "First-Price Auction": games/first-price-auction.md
+  - Agents:
+    - Overview: agents/overview.md
+    - Custom Agents: agents/custom-agents.md
+    - LLM Agents: agents/llm-agents.md
+  - Experiments:
+    - Runner: experiments/runner.md
+    - Dashboard: experiments/dashboard.md
+    - Logging: experiments/logging.md
+  - Reference:
+    - Types: reference/types.md
+    - Project Layout: reference/layout.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
