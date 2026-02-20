@@ -1,4 +1,4 @@
-# neg-env — Multi-Agent Negotiation Environment
+# 🏛️ Agent Colosseum — Multi-Agent Negotiation Environment
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
