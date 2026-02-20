@@ -86,7 +86,7 @@ def _fallback_action(state: TurnState) -> Action:
     return Action(action_type=a.action_type, payload={}) if a else Action(action_type="noop", payload={})
 
 
-def _make_chain(provider: Literal["openai", "openrouter"], model: str, temperature: float, api_key: str | None):
+def _make_chain(provider: Literal["openai", "openrouter"], model: str, temperature: float, api_key: str | None, callbacks: list[Any] | None = None):
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_core.runnables import RunnableLambda
     from langchain_openai import ChatOpenAI
@@ -94,7 +94,10 @@ def _make_chain(provider: Literal["openai", "openrouter"], model: str, temperatu
     key = (api_key or os.environ.get("OPENROUTER_API_KEY") if provider == "openrouter" else api_key or os.environ.get("OPENAI_API_KEY"))
     llm = ChatOpenAI(model=model, temperature=temperature, api_key=key, base_url="https://openrouter.ai/api/v1" if provider == "openrouter" else None)
     def run(inp: dict[str, str]) -> str:
-        out = llm.invoke([SystemMessage(content=inp["system"]), HumanMessage(content=inp["user"])])
+        invoke_kwargs: dict[str, Any] = {}
+        if callbacks:
+            invoke_kwargs["config"] = {"callbacks": callbacks}
+        out = llm.invoke([SystemMessage(content=inp["system"]), HumanMessage(content=inp["user"])], **invoke_kwargs)
         return out.content if hasattr(out, "content") else str(out)
     return RunnableLambda(run)
 
@@ -124,17 +127,25 @@ class LangChainNegotiationAgent(Agent):
         self._model = model or ("gpt-4o-mini" if provider == "openai" else "openai/gpt-4o-mini")
         self._temperature = temperature
         self._api_key = api_key
+        self._langchain_callbacks: list[Any] | None = None
 
     @property
     def agent_id(self) -> str:
         return self._agent_id
+
+    def set_langchain_callbacks(self, callbacks: list[Any] | None) -> None:
+        """Set LangChain callbacks (e.g. OpikTracer) for tracing LLM calls."""
+        self._langchain_callbacks = callbacks
 
     def act(self, state: TurnState) -> AgentResponse:
         if not state.allowed_actions:
             return AgentResponse(action=Action(action_type="noop", payload={}))
         user = _state_to_user_content(state)
         try:
-            chain = self._runnable or _make_chain(self._provider, self._model, self._temperature, self._api_key)
+            chain = self._runnable or _make_chain(
+                self._provider, self._model, self._temperature, self._api_key,
+                callbacks=self._langchain_callbacks,
+            )
             out = chain.invoke({"system": self._system_prompt, "user": user})
             text = out if isinstance(out, str) else getattr(out, "content", str(out))
             return _to_response(state, _parse_llm_response(text))

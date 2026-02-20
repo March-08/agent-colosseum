@@ -48,6 +48,8 @@ class ExperimentConfig(BaseModel):
     max_workers: int = Field(default=1, description="Max concurrent matches. 1 = sequential (default).")
     open_dashboard: bool = Field(default=False, description="Open local dashboard in browser after run")
     dashboard_port: int = Field(default=8765, description="Port for dashboard server")
+    opik_enabled: bool = Field(default=False, description="Enable Opik LLM tracing. Requires OPIK_API_KEY in env.")
+    opik_project_name: str | None = Field(default=None, description="Opik project name. Falls back to OPIK_PROJECT_NAME env var.")
 
 
 class MatchResult(BaseModel):
@@ -174,6 +176,66 @@ class ExperimentRunner:
                 f"Game '{self._config.game_id}' requires at least {min_agents} agents, got {len(agents)}"
             )
 
+        # Opik tracing setup: single shared tracer for all LLM calls
+        opik_tracer = None
+        if self._config.opik_enabled:
+            try:
+                import opik as _opik
+                from opik.integrations.langchain import OpikTracer
+            except ImportError:
+                import warnings
+                warnings.warn(
+                    "Opik tracing enabled but opik not installed. Running without tracing. "
+                    "Install with: pip install -e '.[opik]'",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                # Validate workspace/API key before starting the experiment
+                _opik_client = _opik.Opik(
+                    project_name=self._config.opik_project_name,
+                    _show_misconfiguration_message=False,
+                )
+                try:
+                    _opik_client.auth_check()
+                    _configured_ws = _opik_client.config.workspace
+                    _resolved = _opik_client._rest_client.check.get_workspace_name()
+                    _resolved_ws = getattr(_resolved, "workspace_name", None)
+                    if (
+                        _configured_ws
+                        and _resolved_ws
+                        and _configured_ws != "default"
+                        and _configured_ws != _resolved_ws
+                    ):
+                        raise RuntimeError(
+                            f"Opik workspace '{_configured_ws}' does not match your account workspace "
+                            f"'{_resolved_ws}'. Update OPIK_WORKSPACE in your .env file to '{_resolved_ws}'."
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    err_msg = ""
+                    if hasattr(e, "body") and isinstance(e.body, dict):
+                        err_msg = e.body.get("message", "")
+                    if not err_msg:
+                        err_msg = str(e) if str(e) else type(e).__name__
+                    raise RuntimeError(
+                        f"Opik: {err_msg}. "
+                        f"Check OPIK_API_KEY and OPIK_WORKSPACE in your .env file. "
+                        f"Your workspace name is visible in your Comet URL: comet.com/<workspace>."
+                    ) from e
+                finally:
+                    _opik_client.end()
+
+                opik_tracer = OpikTracer(
+                    project_name=self._config.opik_project_name,
+                    tags=[self._config.game_id],
+                    metadata={"num_matches": self._config.num_matches, **self._config.metadata},
+                )
+                for agent in agents:
+                    if hasattr(agent, "set_langchain_callbacks"):
+                        agent.set_langchain_callbacks([opik_tracer])
+
         start_time = time.monotonic()
         match_results: list[MatchResult] = []
         dashboard_thread = None
@@ -219,6 +281,9 @@ class ExperimentRunner:
                     if dashboard_state is not None:
                         with dashboard_lock:  # type: ignore[union-attr]
                             dashboard_state["match_results"].append(mr.model_dump(mode="json"))
+
+        if opik_tracer is not None:
+            opik_tracer.flush()
 
         total_duration = time.monotonic() - start_time
         result = ExperimentResult(
@@ -438,6 +503,7 @@ class ExperimentRunner:
                             error=result.error,
                             error_detail=result.error_detail,
                         )
+                    if action.action_type != "message_only":
                         break
 
                 if action.action_type not in ("pass", "message_only"):
