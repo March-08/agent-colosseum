@@ -1,7 +1,9 @@
 """ExperimentRunner: run N matches programmatically with pluggable agents."""
 
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,7 @@ class ExperimentConfig(BaseModel):
     )
     log_directory: Path | None = Field(default=None, description="Directory to save match logs")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata")
+    max_workers: int = Field(default=1, description="Max concurrent matches. 1 = sequential (default).")
     open_dashboard: bool = Field(default=False, description="Open local dashboard in browser after run")
     dashboard_port: int = Field(default=8765, description="Port for dashboard server")
 
@@ -175,6 +178,7 @@ class ExperimentRunner:
         match_results: list[MatchResult] = []
         dashboard_thread = None
         dashboard_state: dict[str, Any] | None = None
+        dashboard_lock: threading.Lock | None = None
 
         if self._config.open_dashboard:
             from neg_env.experiment.dashboard import serve_realtime
@@ -182,11 +186,13 @@ class ExperimentRunner:
             dashboard_state = {
                 "config": self._config,
                 "match_results": [],
+                "active_matches": {},
                 "status": "running",
                 "game_id": self._config.game_id,
                 "num_matches": self._config.num_matches,
                 "total_duration_seconds": 0.0,
             }
+            dashboard_lock = threading.Lock()
             dashboard_thread = serve_realtime(
                 dashboard_state,
                 port=self._config.dashboard_port,
@@ -195,11 +201,24 @@ class ExperimentRunner:
             port = self._config.dashboard_port
             print(f"\n  Dashboard: http://127.0.0.1:{port}\n")
 
-        for _ in range(self._config.num_matches):
-            mr = self._run_single_match(agents, spec, dashboard_state)
-            match_results.append(mr)
-            if dashboard_state is not None:
-                dashboard_state["match_results"].append(mr.model_dump(mode="json"))
+        if self._config.max_workers <= 1:
+            for _ in range(self._config.num_matches):
+                mr = self._run_single_match(agents, spec, dashboard_state, dashboard_lock)
+                match_results.append(mr)
+                if dashboard_state is not None:
+                    dashboard_state["match_results"].append(mr.model_dump(mode="json"))
+        else:
+            with ThreadPoolExecutor(max_workers=self._config.max_workers) as pool:
+                futures = [
+                    pool.submit(self._run_single_match, agents, spec, dashboard_state, dashboard_lock)
+                    for _ in range(self._config.num_matches)
+                ]
+                for fut in futures:
+                    mr = fut.result()
+                    match_results.append(mr)
+                    if dashboard_state is not None:
+                        with dashboard_lock:  # type: ignore[union-attr]
+                            dashboard_state["match_results"].append(mr.model_dump(mode="json"))
 
         total_duration = time.monotonic() - start_time
         result = ExperimentResult(
@@ -228,24 +247,38 @@ class ExperimentRunner:
     def _push_live_event(
         self,
         dashboard_state: dict[str, Any] | None,
+        dashboard_lock: threading.Lock | None,
+        match_id: str,
         event_type: str,
         agent_id: str | None = None,
         **data: Any,
     ) -> None:
         if not dashboard_state:
             return
-        current = dashboard_state.get("current_match")
-        if not current or "events" not in current:
-            return
-        current["events"].append({
+        event = {
             "timestamp_ns": time.time_ns(),
             "event_type": event_type,
             "agent_id": agent_id,
             "data": data,
-        })
+        }
+        if dashboard_lock:
+            with dashboard_lock:
+                active = dashboard_state.get("active_matches", {})
+                current = active.get(match_id)
+                if current and "events" in current:
+                    current["events"].append(event)
+        else:
+            active = dashboard_state.get("active_matches", {})
+            current = active.get(match_id)
+            if current and "events" in current:
+                current["events"].append(event)
 
     def _run_single_match(
-        self, agents: list[Agent], spec: Any, dashboard_state: dict[str, Any] | None = None
+        self,
+        agents: list[Agent],
+        spec: Any,
+        dashboard_state: dict[str, Any] | None = None,
+        dashboard_lock: threading.Lock | None = None,
     ) -> MatchResult:
         """Run a single match to completion or max_turns."""
         match_id = uuid.uuid4().hex
@@ -254,16 +287,21 @@ class ExperimentRunner:
         match = create_match(match_id, self._config.game_id, spec, agent_ids)
 
         if dashboard_state is not None:
-            dashboard_state["current_match"] = {
+            entry = {
                 "match_id": match_id,
                 "agent_ids": agent_ids,
                 "events": [],
             }
+            if dashboard_lock:
+                with dashboard_lock:
+                    dashboard_state["active_matches"][match_id] = entry
+            else:
+                dashboard_state.setdefault("active_matches", {})[match_id] = entry
 
         logger = MatchLogger(match_id, self._config.game_id, agent_ids)
         logger.set_metadata(**self._config.metadata)
         logger.log_event("match_start")
-        self._push_live_event(dashboard_state, "match_start")
+        self._push_live_event(dashboard_state, dashboard_lock, match_id, "match_start")
 
         for agent in agents:
             agent.on_match_start(match_id, self._config.game_id, agent_ids)
@@ -293,6 +331,8 @@ class ExperimentRunner:
                     logger.log_messages(current_agent_id, [msg])
                     self._push_live_event(
                         dashboard_state,
+                        dashboard_lock,
+                        match_id,
                         "message",
                         agent_id=current_agent_id,
                         scope=msg.scope.value,
@@ -306,6 +346,8 @@ class ExperimentRunner:
                     logger.log_action(current_agent_id, action.action_type, action.payload, result)
                     self._push_live_event(
                         dashboard_state,
+                        dashboard_lock,
+                        match_id,
                         "action",
                         agent_id=current_agent_id,
                         action_type=action.action_type,
@@ -346,6 +388,8 @@ class ExperimentRunner:
                             logger.log_messages(other_id, [msg])
                             self._push_live_event(
                                 dashboard_state,
+                                dashboard_lock,
+                                match_id,
                                 "message",
                                 agent_id=other_id,
                                 scope=msg.scope.value,
@@ -370,6 +414,8 @@ class ExperimentRunner:
                         logger.log_messages(current_agent_id, [msg])
                         self._push_live_event(
                             dashboard_state,
+                            dashboard_lock,
+                            match_id,
                             "message",
                             agent_id=current_agent_id,
                             scope=msg.scope.value,
@@ -382,6 +428,8 @@ class ExperimentRunner:
                         logger.log_action(current_agent_id, action.action_type, action.payload, result)
                         self._push_live_event(
                             dashboard_state,
+                            dashboard_lock,
+                            match_id,
                             "action",
                             agent_id=current_agent_id,
                             action_type=action.action_type,
@@ -400,9 +448,13 @@ class ExperimentRunner:
         duration = time.monotonic() - start_time
         logger.set_outcome(match.outcome)
         logger.log_event("match_end", status=match.status.value)
-        self._push_live_event(dashboard_state, "match_end", status=match.status.value)
+        self._push_live_event(dashboard_state, dashboard_lock, match_id, "match_end", status=match.status.value)
         if dashboard_state is not None:
-            dashboard_state["current_match"] = None
+            if dashboard_lock:
+                with dashboard_lock:
+                    dashboard_state["active_matches"].pop(match_id, None)
+            else:
+                dashboard_state.get("active_matches", {}).pop(match_id, None)
 
         for agent in agents:
             agent.on_match_end(match_id, match.outcome)

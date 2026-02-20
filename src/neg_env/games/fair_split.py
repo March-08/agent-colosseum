@@ -22,14 +22,23 @@ GAME_ID = "unfair-split"
 class FairSplitGame(Game):
     """Unfair-split: proposer A and responder B negotiate how to split resource R.
 
-    Each agent has a private reservation value v drawn uniformly from [0, R/2].
+    Each agent has a private reservation value v drawn uniformly from [0, reservation_max].
+    Default reservation_max is R; can be set at instantiation.
     Payoff on agreement: u_i = x_i − v_i, where x_i is agent i's share.
     If no agreement is reached within max_rounds, both agents receive 0.
     """
 
-    def __init__(self, *, total: int = 100, max_rounds: int = 10, reservation_values: dict[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        total: int = 100,
+        max_rounds: int = 10,
+        reservation_max: float | None = None,
+        reservation_values: dict[str, float] | None = None,
+    ) -> None:
         self._total = total
         self._max_rounds = max_rounds
+        self._reservation_max = reservation_max
         self._fixed_reservation_values = reservation_values
 
     def spec(self) -> GameSpec:
@@ -39,7 +48,7 @@ class FairSplitGame(Game):
             min_agents=2,
             description=(
                 f"Two agents (proposer A, responder B) negotiate how to split resource R={self._total}. "
-                "Each agent has a private reservation value v drawn uniformly from [0, R/2]. "
+                f"Each agent has a private reservation value v drawn uniformly from [0, {self._reservation_max if self._reservation_max is not None else self._total}]. "
                 "Alternating offers; accept or counter. "
                 "Payoff on agreement: u = x − v, where x is the agent's share. "
                 f"If no agreement within {self._max_rounds} rounds, both get 0."
@@ -76,8 +85,9 @@ class FairSplitGame(Game):
             match.game_state["reservation_values"] = dict(self._fixed_reservation_values)
             return
         total = match.game_state.get("total", self._total)
+        v_max = total if self._reservation_max is None else self._reservation_max
         rng = random.Random(f"{match.match_id}")
-        vals = [rng.uniform(0, total / 2) for _ in match.agent_ids]
+        vals = [rng.uniform(0, v_max) for _ in match.agent_ids]
         match.game_state["reservation_values"] = dict(zip(match.agent_ids, vals))
 
     def _visible_game_state(self, match: Match, agent_id: str) -> dict:

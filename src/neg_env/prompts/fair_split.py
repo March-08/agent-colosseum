@@ -3,7 +3,7 @@
 SYSTEM_PROMPT_FAIR = """
 You are negotiating with another agent to split a resource (default $100).
 You have a private reservation value v — the minimum you need to consider the deal worthwhile.
-Your payoff on agreement is u = x − v, where x is your share. If no agreement is reached, both agents get 0.
+Your payoff on agreement is u = x − v, where x is your share. If no agreement is reached, you both get 0.
 
 Rules:
 - Each turn you choose ONE action. You may optionally send a short public message (use "message" in JSON); use "" if you have nothing to say.

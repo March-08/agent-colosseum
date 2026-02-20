@@ -20,7 +20,10 @@ def _serialize(obj: Any) -> Any:
 def _payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     config = state.get("config")
     match_results = state.get("match_results", [])
-    current_match = state.get("current_match")
+    active_matches = state.get("active_matches", {})
+    active_matches_list = list(active_matches.values()) if active_matches else []
+    # Backward compat: fall back to single current_match if present
+    current_match = state.get("current_match") if not active_matches_list else None
     status = state.get("status", "running")
     total_duration = state.get("total_duration_seconds", 0)
     game_id = state.get("game_id", "")
@@ -50,6 +53,7 @@ def _payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
         "num_matches": num_matches,
         "match_results": match_results,
         "current_match": current_match,
+        "active_matches": active_matches_list,
         "total_duration_seconds": total_duration,
         "completion_rate": completion_rate,
         "no_deal_count": no_deal_count,
@@ -290,6 +294,7 @@ _HTML_POLLING = """<!DOCTYPE html>
     function render(data) {
       var cfg = data.config || {}, res = data.result || {}, status = data.status || 'finished';
       var matches = res.match_results || [], current = res.current_match;
+      var activeMatches = res.active_matches || [];
       var html = '<section><h2>Status</h2><span class="badge ' + (status === 'running' ? 'badge-running' : 'badge-finished') + '">' + (status === 'running' ? 'Running…' : 'Finished') + '</span></section>';
       html += '<section><h2>Config</h2><pre>' + JSON.stringify({ game_id: cfg.game_id, num_matches: cfg.num_matches, max_turns_per_match: cfg.max_turns_per_match, max_messages_per_turn: cfg.max_messages_per_turn, log_directory: cfg.log_directory, metadata: cfg.metadata }, null, 2) + '</pre></section>';
       var isAuction = res.is_auction;
@@ -304,7 +309,16 @@ _HTML_POLLING = """<!DOCTYPE html>
         if (res.mean_payoffs && Object.keys(res.mean_payoffs).length) { html += '<div class="summary" style="margin-top:0.25rem"><span style="color:var(--muted)">Mean utility (share−v, agreements only):</span>' + Object.entries(res.mean_payoffs).map(function(kv) { return '<span>' + kv[0] + ': <strong>' + (typeof kv[1] === 'number' ? kv[1].toFixed(2) : kv[1]) + '</strong></span>'; }).join('') + '</div>'; }
       }
       html += '</section>';
-      if (current && current.events && current.events.length >= 0) {
+      if (activeMatches.length > 0) {
+        html += '<section class="live-section"><h2>Active matches (' + activeMatches.length + ')</h2>';
+        for (var ai = 0; ai < activeMatches.length; ai++) {
+          var am = activeMatches[ai];
+          html += '<div class="match-body" style="margin-bottom:0.5rem;border-bottom:1px solid var(--border);padding-bottom:0.5rem"><strong>' + (am.match_id || '').slice(0, 8) + '…</strong>';
+          if (am.events) { for (var ej = 0; ej < am.events.length; ej++) html += eventLine(am.events[ej]); }
+          html += '</div>';
+        }
+        html += '</section>';
+      } else if (current && current.events && current.events.length >= 0) {
         html += '<section class="live-section"><h2>Current match (live)</h2><div class="match-body">';
         for (var j = 0; j < current.events.length; j++) html += eventLine(current.events[j]);
         html += '</div></section>';
