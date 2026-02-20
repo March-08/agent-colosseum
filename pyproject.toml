@@ -32,8 +32,8 @@ langchain = ["langchain-core>=0.2", "langchain-openai>=0.2"]
 opik = ["opik>=1.0"]
 
 [project.urls]
-Homepage = "https://marcellopoliti.github.io/agents-environment"
-Documentation = "https://marcellopoliti.github.io/agents-environment"
+Homepage = "https://site-seven-indol-67.vercel.app"
+Documentation = "https://site-seven-indol-67.vercel.app"
 Repository = "https://github.com/marcellopoliti/agents-environment"
 
 [tool.setuptools.packages.find]

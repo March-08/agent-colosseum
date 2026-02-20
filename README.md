@@ -61,14 +61,14 @@ See [`examples/`](examples/) for ready-to-run scripts:
 
 ## Documentation
 
-Full documentation: **[marcellopoliti.github.io/agents-environment](https://marcellopoliti.github.io/agents-environment)**
+Full documentation: **[site-seven-indol-67.vercel.app](https://site-seven-indol-67.vercel.app)**
 
-- [Getting started](https://marcellopoliti.github.io/agents-environment/getting-started/quickstart/)
-- [Games](https://marcellopoliti.github.io/agents-environment/games/overview/)
-- [Writing custom agents](https://marcellopoliti.github.io/agents-environment/agents/custom-agents/)
-- [LLM agents](https://marcellopoliti.github.io/agents-environment/agents/llm-agents/)
-- [Experiment runner & results](https://marcellopoliti.github.io/agents-environment/experiments/runner/)
-- [Type reference](https://marcellopoliti.github.io/agents-environment/reference/types/)
+- [Getting started](https://site-seven-indol-67.vercel.app/getting-started/quickstart/)
+- [Games](https://site-seven-indol-67.vercel.app/games/overview/)
+- [Writing custom agents](https://site-seven-indol-67.vercel.app/agents/custom-agents/)
+- [LLM agents](https://site-seven-indol-67.vercel.app/agents/llm-agents/)
+- [Experiment runner & results](https://site-seven-indol-67.vercel.app/experiments/runner/)
+- [Type reference](https://site-seven-indol-67.vercel.app/reference/types/)
 
 ## Tests
 

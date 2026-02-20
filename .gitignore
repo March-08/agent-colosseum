@@ -56,3 +56,4 @@ htmlcov/
 site/
 
 example_*.py
+.vercel
