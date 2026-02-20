@@ -30,6 +30,7 @@ logs/
 
 # IDE
 .cursor/
+.github/
 .idea/
 .vscode/
 *.swp
