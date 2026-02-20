@@ -4,6 +4,8 @@
 
 A research framework for running multi-agent negotiation and strategy games via a **Python API**. Run batch experiments with pluggable agents from a script — no server needed.
 
+**[Full documentation ↗](https://site-seven-indol-67.vercel.app)**
+
 Python 3.10+.
 
 ## Install
@@ -60,8 +62,6 @@ See [`examples/`](examples/) for ready-to-run scripts:
 - [`first_price_auction.py`](examples/first_price_auction.py) — two LLM bidders in a sealed-bid auction
 
 ## Documentation
-
-Full documentation: **[site-seven-indol-67.vercel.app](https://site-seven-indol-67.vercel.app)**
 
 - [Getting started](https://site-seven-indol-67.vercel.app/getting-started/quickstart/)
 - [Games](https://site-seven-indol-67.vercel.app/games/overview/)
