@@ -1,5 +1,6 @@
 """ExperimentRunner: run N matches programmatically with pluggable agents."""
 
+import json
 import threading
 import time
 import uuid
@@ -17,6 +18,36 @@ from neg_env.games.base import Game
 from neg_env.games.builtins import ensure_builtins_registered
 from neg_env.logging.match_logger import MatchLog, MatchLogger
 from neg_env.types import Action, AllowedAction
+
+
+def _format_trace_input(state: Any, system_prompt: str | None = None) -> dict[str, Any]:
+    """Format a TurnState into a trace input dict for Opik conversation view."""
+    d: dict[str, Any] = {}
+    if system_prompt:
+        d["system_prompt"] = system_prompt
+    d["phase"] = state.phase
+    d["game_state"] = state.game_state
+    if state.messages:
+        d["messages"] = [
+            {"sender": m.sender_id, "content": m.content} for m in state.messages
+        ]
+    d["allowed_actions"] = [a.action_type for a in state.allowed_actions]
+    return d
+
+
+def _format_trace_output(response_messages: list, action: Action) -> str:
+    """Format agent response (messages + action) as trace output string."""
+    parts = []
+    for msg in response_messages:
+        if msg.content:
+            parts.append(msg.content)
+    if action.action_type != "message_only":
+        action_str = action.action_type
+        if action.payload:
+            payload_str = ", ".join(f"{k}={v}" for k, v in action.payload.items())
+            action_str += f" ({payload_str})"
+        parts.append(f"Action: {action_str}")
+    return "\n".join(parts) if parts else "(no response)"
 
 
 class ExperimentConfig(BaseModel):
@@ -176,8 +207,9 @@ class ExperimentRunner:
                 f"Game '{self._config.game_id}' requires at least {min_agents} agents, got {len(agents)}"
             )
 
-        # Opik tracing setup: single shared tracer for all LLM calls
+        # Opik tracing setup: OpikTracer for LLM metrics, opik_conv_client for conversation threads
         opik_tracer = None
+        opik_conv_client = None
         if self._config.opik_enabled:
             try:
                 import opik as _opik
@@ -235,6 +267,9 @@ class ExperimentRunner:
                 for agent in agents:
                     if hasattr(agent, "set_langchain_callbacks"):
                         agent.set_langchain_callbacks([opik_tracer])
+                opik_conv_client = _opik.Opik(
+                    project_name=self._config.opik_project_name,
+                )
 
         start_time = time.monotonic()
         match_results: list[MatchResult] = []
@@ -265,14 +300,14 @@ class ExperimentRunner:
 
         if self._config.max_workers <= 1:
             for _ in range(self._config.num_matches):
-                mr = self._run_single_match(agents, spec, dashboard_state, dashboard_lock)
+                mr = self._run_single_match(agents, spec, dashboard_state, dashboard_lock, opik_conv_client)
                 match_results.append(mr)
                 if dashboard_state is not None:
                     dashboard_state["match_results"].append(mr.model_dump(mode="json"))
         else:
             with ThreadPoolExecutor(max_workers=self._config.max_workers) as pool:
                 futures = [
-                    pool.submit(self._run_single_match, agents, spec, dashboard_state, dashboard_lock)
+                    pool.submit(self._run_single_match, agents, spec, dashboard_state, dashboard_lock, opik_conv_client)
                     for _ in range(self._config.num_matches)
                 ]
                 for fut in futures:
@@ -284,6 +319,9 @@ class ExperimentRunner:
 
         if opik_tracer is not None:
             opik_tracer.flush()
+        if opik_conv_client is not None:
+            opik_conv_client.flush()
+            opik_conv_client.end()
 
         total_duration = time.monotonic() - start_time
         result = ExperimentResult(
@@ -344,6 +382,7 @@ class ExperimentRunner:
         spec: Any,
         dashboard_state: dict[str, Any] | None = None,
         dashboard_lock: threading.Lock | None = None,
+        opik_conv_client: Any = None,
     ) -> MatchResult:
         """Run a single match to completion or max_turns."""
         match_id = uuid.uuid4().hex
@@ -375,6 +414,22 @@ class ExperimentRunner:
         turn_count = 0
         message_count = 0
         error_str: str | None = None
+
+        def _log_opik_trace(agent_id: str, state: Any, msgs: list, action: Action) -> None:
+            """Log one agent turn as a conversation trace in Opik."""
+            if opik_conv_client is None:
+                return
+            ag = agent_map.get(agent_id)
+            sys_prompt = getattr(ag, "_system_prompt", None)
+            trace = opik_conv_client.trace(
+                name=agent_id,
+                input=_format_trace_input(state, system_prompt=sys_prompt),
+                output=_format_trace_output(msgs, action),
+                thread_id=match_id,
+                tags=[self._config.game_id],
+                metadata={"match_id": match_id, "agent_id": agent_id, "turn": turn_count},
+            )
+            trace.end()
 
         try:
             while match.status == MatchStatus.RUNNING and turn_count < self._config.max_turns_per_match:
@@ -422,6 +477,8 @@ class ExperimentRunner:
                         error_detail=result.error_detail,
                     )
 
+                _log_opik_trace(current_agent_id, state, response.messages[: self._config.max_messages_per_turn], action)
+
                 message_only_action = AllowedAction(
                     action_type="message_only",
                     description="Only send messages in response to new chat",
@@ -465,6 +522,7 @@ class ExperimentRunner:
                         if act_other.action_type != "message_only":
                             act_other = Action(action_type="message_only", payload={})
                         apply_action(match, other_id, act_other)
+                        _log_opik_trace(other_id, state_other, resp.messages[: self._config.max_messages_per_turn], act_other)
                     ping_count += 1
                     state = get_turn_state(match, current_agent_id)
                     if state is None:
@@ -503,6 +561,7 @@ class ExperimentRunner:
                             error=result.error,
                             error_detail=result.error_detail,
                         )
+                    _log_opik_trace(current_agent_id, state, response.messages[: self._config.max_messages_per_turn], action)
                     if action.action_type != "message_only":
                         break
 
