@@ -1,0 +1,51 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: trust
+  name: "Trust (Investment then Return)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Trustor sends an amount x from an endowment E to trustee. The amount is multiplied by m. Trustee chooses how much to return r.
+    Payoffs: trustor = (E - x) + r; trustee = (m*x - r). Resolves after send and return or timeout.
+parameters:
+  max_rounds: 8
+  endowment: 10
+  multiplier: 3
+  role_map: null  # {trustor, trustee}
+private_state_draw: {}
+initial_state: {sent: null, returned: null, action_history: [], resolved: false}
+phases:
+  - {name: send, turn_order: role_based, roles: [trustor], max_rounds: 3, allowed_actions: [send, pass, message]}
+  - {name: return, turn_order: role_based, roles: [trustee], max_rounds: 3, allowed_actions: [return, pass, message]}
+actions:
+  send:
+    payload_schema: {amount: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["amount <= parameters.endowment"]
+    effects: ["state.sent = amount", "append action_history"]
+  return:
+    payload_schema: {amount: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["state.sent != null", "amount <= parameters.multiplier * state.sent"]
+    effects: ["state.returned = amount", "append action_history", "mark resolved"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "state.resolved == true"
+  outcome:
+    payoffs:
+      trustor: "(parameters.endowment - state.sent) + state.returned"
+      trustee: "(parameters.multiplier * state.sent) - state.returned"
+    reason: trust_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

@@ -1,0 +1,72 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: insurance-moral-hazard
+  name: "Insurance with Moral Hazard (Hidden Effort)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Insurer offers a contract specifying transfers in each output state. Insured chooses hidden effort that affects
+    outcome probabilities. Outcome is realized; transfers applied; utilities computed as consumption minus effort cost.
+    Resolves after contract accepted and outcome realized or timeout.
+parameters:
+  max_rounds: 10
+  states: [good, bad]
+  loss: 10
+  effort_cost: 1
+  p_good_low_effort: 0.6
+  p_good_high_effort: 0.8
+  contract: null  # optional fixed {transfer_good: x, transfer_bad: y, premium: p}
+  role_map: null  # {insurer, insured}
+private_state_draw: {}
+initial_state:
+  contract: null
+  accepted: null
+  effort: null
+  state_realized: null
+  action_history: []
+  resolved: false
+phases:
+  - {name: offer_contract, turn_order: role_based, roles: [insurer], max_rounds: 3, allowed_actions: [offer, pass, message]}
+  - {name: accept_contract, turn_order: role_based, roles: [insured], max_rounds: 2, allowed_actions: [accept, reject, message]}
+  - {name: choose_effort, turn_order: role_based, roles: [insured], max_rounds: 2, allowed_actions: [choose_effort, pass, message]}
+actions:
+  offer:
+    payload_schema: {premium: {type: number}, transfer_good: {type: number}, transfer_bad: {type: number}}
+    advances_turn: true
+    effects: ["state.contract = payload", "append action_history"]
+  accept: {payload_schema: {}, advances_turn: true, preconditions: ["state.contract != null"], effects: ["state.accepted = true", "append action_history"]}
+  reject: {payload_schema: {}, advances_turn: true, preconditions: ["state.contract != null"], effects: ["state.accepted = false", "mark resolved", "append action_history"]}
+  choose_effort:
+    payload_schema: {effort: {type: string, enum: [low, high]}}
+    advances_turn: true
+    preconditions: ["state.accepted == true"]
+    effects: ["state.effort = effort", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "state.accepted == false OR (state.accepted == true AND state.effort != null)"
+  outcome:
+    if_reject:
+      payoffs: 0
+      reason: insurance_rejected
+    if_accept:
+      realize_state: >
+        draw good with p = p_good_high_effort if effort==high else p_good_low_effort (seed=match_id)
+      payoffs:
+        insured: >
+          ( -loss_if_bad + transfer_state - premium ) - (effort_cost if effort==high else 0)
+        insurer: >
+          premium - transfer_state
+      reason: insurance_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

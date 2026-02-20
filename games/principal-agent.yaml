@@ -1,0 +1,62 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: principal-agent
+  name: "Principal–Agent (Hidden Action, Contracting)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Principal offers an incentive contract mapping observable outcome to wage. Agent accepts/rejects then chooses hidden effort.
+    Outcome is realized from effort-dependent distribution. Payoffs: principal gets output - wage; agent gets wage - effort_cost.
+    Resolves after acceptance and outcome realization or timeout.
+parameters:
+  max_rounds: 12
+  outcomes: [low, high]
+  output_low: 0
+  output_high: 10
+  effort_cost: 1
+  p_high_low_effort: 0.4
+  p_high_high_effort: 0.7
+  role_map: null
+private_state_draw: {}
+initial_state: {contract: null, accepted: null, effort: null, outcome: null, action_history: [], resolved: false}
+phases:
+  - {name: offer, turn_order: role_based, roles: [principal], max_rounds: 4, allowed_actions: [offer_contract, pass, message]}
+  - {name: accept, turn_order: role_based, roles: [agent], max_rounds: 2, allowed_actions: [accept, reject, message]}
+  - {name: effort, turn_order: role_based, roles: [agent], max_rounds: 2, allowed_actions: [choose_effort, pass, message]}
+actions:
+  offer_contract:
+    payload_schema: {w_low: {type: number}, w_high: {type: number}}
+    advances_turn: true
+    effects: ["state.contract = payload", "append action_history"]
+  accept: {payload_schema: {}, advances_turn: true, preconditions: ["state.contract != null"], effects: ["state.accepted = true", "append action_history"]}
+  reject: {payload_schema: {}, advances_turn: true, preconditions: ["state.contract != null"], effects: ["state.accepted = false", "mark resolved", "append action_history"]}
+  choose_effort:
+    payload_schema: {effort: {type: string, enum: [low, high]}}
+    advances_turn: true
+    preconditions: ["state.accepted == true"]
+    effects: ["state.effort = effort", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "state.accepted == false OR (state.accepted == true AND state.effort != null)"
+  outcome:
+    if_reject: {payoffs: 0, reason: contract_rejected}
+    if_accept:
+      realize_outcome: >
+        draw high with p = p_high_high_effort if effort==high else p_high_low_effort (seed=match_id)
+      payoffs:
+        agent: "w_outcome - (effort_cost if effort==high else 0)"
+        principal: "output_outcome - w_outcome"
+      reason: principal_agent_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

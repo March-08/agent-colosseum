@@ -1,0 +1,46 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: dictator
+  name: "Dictator (Unilateral Split)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Allocator (dictator) chooses how to split a fixed pie between self and recipient. Recipient has no action.
+    Engine resolves immediately after allocator submits split; timeout yields 0 for all.
+parameters:
+  max_rounds: 3
+  pie: 10
+  role_map: null   # optional {allocator: agent_id, recipient: agent_id}
+private_state_draw: {}
+initial_state: {allocation: null, action_history: [], resolved: false}
+phases:
+  - {name: allocate, turn_order: role_based, roles: [allocator], max_rounds: 3, allowed_actions: [allocate_split, pass, message]}
+actions:
+  allocate_split:
+    payload_schema:
+      allocator_share: {type: number, min: 0}
+      recipient_share: {type: number, min: 0}
+    advances_turn: true
+    preconditions: ["allocator_share + recipient_share == parameters.pie"]
+    effects: ["state.allocation = {allocator_share, recipient_share}", "append action_history", "mark resolved"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "state.resolved == true"
+  outcome:
+    payoffs:
+      allocator: "state.allocation.allocator_share"
+      recipient: "state.allocation.recipient_share"
+    reason: dictator_allocated
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

@@ -1,0 +1,48 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: war-of-attrition
+  name: "War of Attrition (Quit-Time Competition)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Each agent chooses a quit time t (or equivalently a bid). Highest t wins the prize but both pay cost proportional
+    to the minimum quit time. Winner utility = prize - cost*min_t; loser utility = -cost*min_t. Resolves after all submit.
+parameters:
+  max_rounds: 10
+  prize: 10
+  cost_rate: 1
+  time_range: [0, 10]
+private_state_draw: {}
+initial_state: {times: {}, action_history: [], resolved: false}
+phases:
+  - {name: choose_time, turn_order: round_robin, max_rounds: 10, allowed_actions: [submit_time, pass, message]}
+actions:
+  submit_time:
+    payload_schema: {t: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.times"]
+    effects: ["state.times[agent_id] = t", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "len(state.times) == num_agents"
+  outcome:
+    winner: "argmax(state.times) with tiebreak random(seed=match_id+'_tiebreak')"
+    min_t: "min(state.times.values())"
+    cost: "parameters.cost_rate * min_t"
+    payoffs:
+      winner: "parameters.prize - cost"
+      losers: "-cost"
+    reason: attrition_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

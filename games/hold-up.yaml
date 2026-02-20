@@ -1,0 +1,60 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: hold-up
+  name: "Hold-Up (Investment then Bargaining)"
+  min_agents: 2
+  outcome_rule: agreement
+  description: >
+    Two agents choose relationship-specific investment (one or both) that increases a joint surplus, then bargain over
+    how to split the realized surplus. Lack of commitment can cause underinvestment. Game ends after agreement or timeout.
+parameters:
+  max_rounds: 10
+  investment_cost: 10
+  surplus_base: 0
+  surplus_multiplier: 3     # surplus = base + multiplier * total_investment
+  role_map: null
+private_state_draw: {}
+initial_state:
+  investments: {}
+  surplus: null
+  offer: null
+  last_offer_by: null
+  action_history: []
+  resolved: false
+phases:
+  - {name: invest, turn_order: round_robin, max_rounds: 5, allowed_actions: [invest, pass, message]}
+  - {name: bargain, turn_order: alternating, max_rounds: 5, allowed_actions: [make_offer, accept, reject, message]}
+actions:
+  invest:
+    payload_schema: {amount: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.investments"]
+    effects: ["state.investments[agent_id] = amount", "append action_history"]
+  make_offer:
+    payload_schema: {split: {type: object}}  # e.g., {"agentA": x, "agentB": y} summing to surplus
+    advances_turn: true
+    preconditions: ["state.surplus != null"]
+    effects: ["state.offer = split", "state.last_offer_by = agent_id", "append action_history"]
+  accept: {payload_schema: {}, advances_turn: true, preconditions: ["state.offer != null"], effects: ["mark resolved", "append action_history"]}
+  reject: {payload_schema: {}, advances_turn: true, preconditions: ["state.offer != null"], effects: ["append action_history"]}
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "state.resolved == true"
+  outcome:
+    compute_surplus: "parameters.surplus_base + parameters.surplus_multiplier * sum(state.investments.values())"
+    payoffs:
+      each_agent: "state.offer[agent_id] - parameters.investment_cost * state.investments.get(agent_id, 0)"
+    reason: hold_up_agreement
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

@@ -1,0 +1,51 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: public-project
+  name: "Public Project (Binary Provision)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Each agent has a private valuation for building a public project of cost C. Agents report valuations.
+    If sum of reported valuations >= C, the project is built; otherwise not. Payoffs: if built, agent gets
+    (true valuation - per_capita_cost); else 0, unless transfers are specified. Resolves after all reports.
+parameters:
+  max_rounds: 10
+  valuation_range: [0, 100]
+  valuations: null
+  project_cost: 100
+  cost_sharing: equal   # equal | proportional | none
+private_state_draw:
+  valuations: {source: random_or_fixed, random: {dist: uniform, low: 0, high: 100, seed: match_id}}
+initial_state: {reports: {}, built: null, action_history: [], resolved: false}
+phases:
+  - {name: report, turn_order: round_robin, max_rounds: 10, allowed_actions: [report_value, pass, message]}
+actions:
+  report_value:
+    payload_schema: {report: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.reports"]
+    effects: ["state.reports[agent_id] = report", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "len(state.reports) == num_agents"
+  outcome:
+    built: "sum(state.reports.values()) >= parameters.project_cost"
+    payoffs:
+      if_built:
+        each_agent: >
+          private.valuations[agent_id] - (parameters.project_cost / num_agents)   # if cost_sharing == equal
+      if_not_built: 0
+    reason: public_project_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

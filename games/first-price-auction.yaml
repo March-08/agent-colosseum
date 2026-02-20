@@ -1,0 +1,44 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: first-price-auction
+  name: "First-Price Sealed-Bid Auction"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Each agent draws a private valuation and submits one sealed bid. Highest bid wins and pays their own bid
+    (ties broken randomly). Winner utility = valuation - bid; others get 0. Resolves on all bids or timeout.
+parameters: {max_rounds: 10, valuation_range: [0, 100], valuations: null}
+private_state_draw:
+  valuations: {source: random_or_fixed, random: {dist: uniform, low: 0, high: 100, seed: match_id}}
+initial_state: {bids: {}, action_history: [], resolved: false}
+phases:
+  - {name: auction, turn_order: round_robin, max_rounds: 10, allowed_actions: [submit_bid, pass, message]}
+actions:
+  submit_bid:
+    payload_schema: {bid: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.bids"]
+    effects: ["state.bids[agent_id] = bid", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "len(state.bids) == num_agents"
+  outcome:
+    winner: "argmax(state.bids) with tiebreak random(seed=match_id+'_tiebreak')"
+    price: "state.bids[winner]"
+    payoffs:
+      winner: "private.valuations[winner] - price"
+      others: 0
+    reason: auction_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

@@ -1,0 +1,50 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: provision-point
+  name: "Provision Point (Threshold Public Good / Assurance Contract)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Agents commit contributions toward a public project with threshold T. If total contributions >= T, project is funded
+    and contributions are collected; otherwise all contributions are refunded (0 net cost). Resolves after all contribute.
+parameters:
+  max_rounds: 10
+  threshold: 100
+  endowment: 100
+  valuations: null
+  valuation_range: [0, 150]
+private_state_draw:
+  valuations: {source: random_or_fixed, random: {dist: uniform, low: 0, high: 150, seed: match_id}}
+initial_state: {contribs: {}, action_history: [], resolved: false}
+phases:
+  - {name: commit, turn_order: round_robin, max_rounds: 10, allowed_actions: [commit, pass, message]}
+actions:
+  commit:
+    payload_schema: {amount: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.contribs", "amount <= parameters.endowment"]
+    effects: ["state.contribs[agent_id] = amount", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "len(state.contribs) == num_agents"
+  outcome:
+    funded: "sum(state.contribs.values()) >= parameters.threshold"
+    payoffs:
+      if_funded:
+        each_agent: "private.valuations[agent_id] - state.contribs[agent_id]"
+      if_not_funded:
+        each_agent: 0
+    reason: provision_point_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

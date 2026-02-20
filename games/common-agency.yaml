@@ -1,0 +1,75 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: common-agency
+  name: "Common Agency (Multiple Principals, One Agent)"
+  min_agents: 3
+  outcome_rule: engine
+  description: >
+    Multiple principals simultaneously offer contracts to a single agent. The agent accepts a set of contracts and chooses
+    hidden effort. Outcome realized; each principal pays wage per their contract. Agent utility is total wages minus effort cost.
+    Principals receive benefit from outcome minus their wage. Resolves after offers, acceptance, and outcome.
+parameters:
+  max_rounds: 15
+  num_principals: 2
+  outcomes: [low, high]
+  benefit_low: 0
+  benefit_high: 10
+  effort_cost: 1
+  p_high_low_effort: 0.4
+  p_high_high_effort: 0.7
+  agent_id: null   # optional explicit agent id; else last agent is agent
+private_state_draw: {}
+initial_state:
+  contracts: {}
+  accepted_contracts: null
+  effort: null
+  outcome: null
+  action_history: []
+  resolved: false
+phases:
+  - {name: offer_contracts, turn_order: round_robin, roles: [principals], max_rounds: 6, allowed_actions: [offer_contract, pass, message]}
+  - {name: accept_bundle, turn_order: role_based, roles: [agent], max_rounds: 3, allowed_actions: [accept_bundle, reject_all, message]}
+  - {name: choose_effort, turn_order: role_based, roles: [agent], max_rounds: 3, allowed_actions: [choose_effort, pass, message]}
+actions:
+  offer_contract:
+    payload_schema: {w_low: {type: number}, w_high: {type: number}}
+    advances_turn: true
+    preconditions: ["actor_is_principal"]
+    effects: ["state.contracts[agent_id] = payload", "append action_history"]
+  accept_bundle:
+    payload_schema: {accept: {type: boolean}}
+    advances_turn: true
+    effects: ["state.accepted_contracts = state.contracts", "append action_history"]
+  reject_all:
+    payload_schema: {}
+    advances_turn: true
+    effects: ["state.accepted_contracts = {}", "mark resolved", "append action_history"]
+  choose_effort:
+    payload_schema: {effort: {type: string, enum: [low, high]}}
+    advances_turn: true
+    effects: ["state.effort = effort", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "state.resolved == true OR (state.accepted_contracts != null AND state.effort != null)"
+  outcome:
+    if_reject: {payoffs: 0, reason: common_agency_rejected}
+    if_accept:
+      realize_outcome: >
+        draw high with p = p_high_high_effort if effort==high else p_high_low_effort (seed=match_id)
+      payoffs:
+        agent: "sum_i(w_i_outcome) - (effort_cost if effort==high else 0)"
+        each_principal: "benefit_outcome - w_i_outcome"
+      reason: common_agency_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

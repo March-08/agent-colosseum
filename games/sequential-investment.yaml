@@ -1,0 +1,49 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: sequential-investment
+  name: "Sequential Investment (First-mover then Second-mover)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Agents invest sequentially (leader then follower). Joint payoff depends on both investments (complements or substitutes).
+    Engine computes payoffs after both invest, subtracting investment costs. Resolves after both investments or timeout.
+parameters:
+  max_rounds: 6
+  investment_cost: 1
+  interaction: complements   # complements | substitutes
+  payoff_scale: 10
+  role_map: null  # optional {leader: agent_id, follower: agent_id}
+private_state_draw: {}
+initial_state: {investments: {}, action_history: [], resolved: false}
+phases:
+  - {name: leader_invest, turn_order: role_based, roles: [leader], max_rounds: 3, allowed_actions: [invest, pass, message]}
+  - {name: follower_invest, turn_order: role_based, roles: [follower], max_rounds: 3, allowed_actions: [invest, pass, message]}
+actions:
+  invest:
+    payload_schema: {amount: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.investments"]
+    effects: ["state.investments[agent_id] = amount", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "len(state.investments) == num_agents"
+  outcome:
+    joint_benefit: >
+      if interaction == complements then payoff_scale * (prod(investments))
+      else payoff_scale * (sum(investments))
+    payoffs:
+      each_agent: "0.5 * joint_benefit - parameters.investment_cost * state.investments[agent_id]"
+    reason: sequential_investment_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

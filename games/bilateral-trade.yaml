@@ -1,0 +1,79 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: bilateral-trade
+  name: "Bilateral Trade (Price Offer)"
+  min_agents: 2
+  outcome_rule: agreement
+  description: >
+    Two agents (buyer, seller). Buyer has private value v; seller has private cost c. Buyer proposes a trade price p.
+    Seller accepts or rejects. If accepted, buyer utility = v - p and seller utility = p - c; if rejected, both 0.
+    Resolves on accept/reject or timeout.
+parameters:
+  max_rounds: 5
+  buyer_value_range: [0, 100]
+  seller_cost_range: [0, 100]
+  role_map: null   # optional {buyer: agent_id, seller: agent_id}
+  buyer_value: null
+  seller_cost: null
+private_state_draw:
+  buyer_value: {source: random_or_fixed, random: {dist: uniform, low: 0, high: 100, seed: match_id}}
+  seller_cost: {source: random_or_fixed, random: {dist: uniform, low: 0, high: 100, seed: match_id}}
+initial_state:
+  offer: null
+  last_offer_by: null
+  action_history: []
+  resolved: false
+phases:
+  - name: propose
+    turn_order: role_based
+    roles: [buyer]
+    max_rounds: 5
+    allowed_actions: [make_offer, message]
+  - name: respond
+    turn_order: role_based
+    roles: [seller]
+    max_rounds: 5
+    allowed_actions: [accept, reject, message]
+actions:
+  make_offer:
+    payload_schema: {price: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["current_phase == propose", "actor_role == buyer"]
+    effects: ["state.offer = price", "state.last_offer_by = agent_id", "append action_history"]
+  accept:
+    payload_schema: {}
+    advances_turn: true
+    preconditions: ["current_phase == respond", "state.offer != null"]
+    effects: ["mark resolved", "append action_history"]
+  reject:
+    payload_schema: {}
+    advances_turn: true
+    preconditions: ["current_phase == respond", "state.offer != null"]
+    effects: ["mark resolved", "append action_history"]
+  message:
+    payload_schema: {message: {type: string}}
+    advances_turn: false
+    effects: ["append action_history"]
+resolution:
+  trigger: "action in {accept, reject}"
+  outcome:
+    if_accept:
+      payoffs:
+        buyer: "private.buyer_value - state.offer"
+        seller: "state.offer - private.seller_cost"
+      reason: trade_agreed
+    if_reject:
+      payoffs: 0
+      reason: trade_rejected
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

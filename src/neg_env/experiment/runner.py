@@ -1,4 +1,5 @@
 """ExperimentRunner: run N matches programmatically with pluggable agents."""
+from __future__ import annotations
 
 import json
 import threading

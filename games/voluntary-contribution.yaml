@@ -1,0 +1,44 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: voluntary-contribution
+  name: "Voluntary Contribution (Public Good)"
+  min_agents: 2
+  outcome_rule: engine
+  description: >
+    Each agent chooses a contribution to a public good. Total contribution determines public good level.
+    Each agent gets benefit based on total contribution and pays own contribution. Resolves after all contribute.
+parameters:
+  max_rounds: 10
+  endowment: 10
+  multiplier: 0.5     # per-unit marginal benefit to each agent from total contributions
+private_state_draw: {}
+initial_state: {contribs: {}, action_history: [], resolved: false}
+phases:
+  - {name: contribute, turn_order: round_robin, max_rounds: 10, allowed_actions: [contribute, pass, message]}
+actions:
+  contribute:
+    payload_schema: {amount: {type: number, min: 0}}
+    advances_turn: true
+    preconditions: ["agent_id not in state.contribs", "amount <= parameters.endowment"]
+    effects: ["state.contribs[agent_id] = amount", "append action_history"]
+  pass: {payload_schema: {}, advances_turn: true, effects: ["append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "len(state.contribs) == num_agents"
+  outcome:
+    total: "sum(state.contribs.values())"
+    payoffs:
+      each_agent: "parameters.multiplier * total - state.contribs[agent_id]"
+    reason: vcm_resolved
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}

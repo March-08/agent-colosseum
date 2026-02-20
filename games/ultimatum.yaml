@@ -1,0 +1,52 @@
+spec_version: "0.1"
+notes:
+  purpose: >
+    Minimal declarative game specs for generating Python game class instances.
+    Separation of concerns: identity + parameters + private_state_draw + state + phases/actions + resolution + timeout.
+  conventions:
+    outcome_rule: [engine, agreement, mediator]
+    rng_seed: match_id
+    payoffs: >
+      Unless otherwise specified, payoffs are utilities (can be negative).
+      If a role is referenced (buyer/seller), roles are assigned by agent order unless parameters specify role_map.
+
+
+game_id: ultimatum
+  name: "Ultimatum (Split Proposal)"
+  min_agents: 2
+  outcome_rule: agreement
+  description: >
+    Proposer chooses a split of a fixed pie between proposer and responder. Responder accepts or rejects.
+    If accepted, payoffs follow the split; if rejected, both get 0. Resolves on accept/reject or timeout.
+parameters:
+  max_rounds: 3
+  pie: 10
+  role_map: null   # optional {proposer: agent_id, responder: agent_id}
+private_state_draw: {}
+initial_state: {offer: null, action_history: [], resolved: false}
+phases:
+  - {name: propose, turn_order: role_based, roles: [proposer], max_rounds: 3, allowed_actions: [propose_split, message]}
+  - {name: respond, turn_order: role_based, roles: [responder], max_rounds: 3, allowed_actions: [accept, reject, message]}
+actions:
+  propose_split:
+    payload_schema:
+      proposer_share: {type: number, min: 0}
+      responder_share: {type: number, min: 0}
+    advances_turn: true
+    preconditions: ["proposer_share + responder_share == parameters.pie"]
+    effects: ["state.offer = {proposer_share, responder_share}", "append action_history"]
+  accept: {payload_schema: {}, advances_turn: true, preconditions: ["state.offer != null"], effects: ["mark resolved", "append action_history"]}
+  reject: {payload_schema: {}, advances_turn: true, preconditions: ["state.offer != null"], effects: ["mark resolved", "append action_history"]}
+  message: {payload_schema: {message: {type: string}}, advances_turn: false, effects: ["append action_history"]}
+resolution:
+  trigger: "action in {accept, reject}"
+  outcome:
+    if_accept:
+      payoffs:
+        proposer: "state.offer.proposer_share"
+        responder: "state.offer.responder_share"
+      reason: ultimatum_accepted
+    if_reject:
+      payoffs: 0
+      reason: ultimatum_rejected
+timeout: {on_max_rounds: {payoffs: 0, reason: max_rounds_exceeded}}
