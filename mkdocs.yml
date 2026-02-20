@@ -1,7 +1,7 @@
 site_name: neg-env
 site_description: Multi-agent negotiation environment for research
-repo_url: https://github.com/marcellopoliti/agents-environment
-repo_name: marcellopoliti/agents-environment
+repo_url: https://github.com/March-08/agent-colosseum
+repo_name: March-08/agent-colosseum
 
 theme:
   name: material

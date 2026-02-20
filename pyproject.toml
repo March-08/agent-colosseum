@@ -34,7 +34,7 @@ opik = ["opik>=1.0"]
 [project.urls]
 Homepage = "https://site-seven-indol-67.vercel.app"
 Documentation = "https://site-seven-indol-67.vercel.app"
-Repository = "https://github.com/marcellopoliti/agents-environment"
+Repository = "https://github.com/March-08/agent-colosseum"
 
 [tool.setuptools.packages.find]
 where = ["src"]
