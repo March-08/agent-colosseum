@@ -10,7 +10,15 @@ from neg_env.agents import Agent, RandomAgent
 try:
     from neg_env.agents import LangChainNegotiationAgent  # noqa: F401
 except ImportError:
-    LangChainNegotiationAgent = None  # type: ignore[misc, assignment]
+
+    class LangChainNegotiationAgent:  # type: ignore[no-redef]
+        """Placeholder that raises a helpful error when langchain extras are missing."""
+
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "LangChainNegotiationAgent requires the langchain extra. "
+                "Install it with: pip install -e '.[langchain]'"
+            )
 
 # Experiment runner
 from neg_env.experiment import ExperimentConfig, ExperimentResult, ExperimentRunner

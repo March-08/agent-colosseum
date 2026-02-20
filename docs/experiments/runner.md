@@ -18,6 +18,34 @@ config = ExperimentConfig(
     metadata={"experiment": "v1"},   # arbitrary metadata attached to logs
     open_dashboard=True,             # open live browser dashboard
     dashboard_port=8765,             # port for dashboard server
+    max_workers=4,                   # run matches in parallel (default: 1)
+    opik_enabled=True,               # enable Opik experiment tracing
+    opik_project_name="my-project",  # Opik project name
+)
+```
+
+## Parallel execution
+
+Set `max_workers` to run multiple matches concurrently using a thread pool. This is especially useful for LLM-backed agents where most time is spent waiting on API calls.
+
+```python
+config = ExperimentConfig(
+    game_id="unfair-split",
+    num_matches=50,
+    max_workers=8,   # 8 matches run in parallel
+)
+```
+
+## Opik tracing
+
+When `opik_enabled=True`, each experiment run is logged to [Opik](https://www.comet.com/site/products/opik/) for analysis and comparison. Set `OPIK_API_KEY` and `OPIK_WORKSPACE` in your environment (see `.env.example`).
+
+```python
+config = ExperimentConfig(
+    game_id="unfair-split",
+    num_matches=10,
+    opik_enabled=True,
+    opik_project_name="unfair-split-v2",
 )
 ```
 

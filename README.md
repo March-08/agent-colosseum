@@ -1,5 +1,7 @@
 # neg-env — Multi-Agent Negotiation Environment
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A research framework for running multi-agent negotiation and strategy games via a **Python API**. Run batch experiments with pluggable agents from a script — no server needed.
 
 Python 3.10+.
@@ -8,6 +10,18 @@ Python 3.10+.
 
 ```bash
 pip install -e .
+```
+
+With LLM agent support:
+
+```bash
+pip install -e ".[langchain]"
+```
+
+With [Opik](https://www.comet.com/site/products/opik/) tracing:
+
+```bash
+pip install -e ".[opik]"
 ```
 
 ## Quick start
@@ -23,12 +37,27 @@ print(f"Deals: {result.num_matches - result.no_deal_count}/{result.num_matches}"
 print(f"Mean utility: {result.mean_payoffs}")
 ```
 
+## Features
+
+- **Pluggable agents** — built-in `RandomAgent`, LLM-backed `LangChainNegotiationAgent`, or write your own
+- **Parallel execution** — run matches concurrently with `max_workers`
+- **Live dashboard** — browser-based real-time experiment dashboard
+- **Opik tracing** — optional experiment tracing via `opik_enabled=True`
+- **Structured results** — aggregate stats, per-match details, and JSON logs
+
 ## Available games
 
 | Game | ID | Description |
 |------|----|-------------|
 | Unfair Split | `unfair-split` | Two agents negotiate how to split a resource. Private reservation values. |
 | First-Price Auction | `first-price-auction` | Two bidders submit sealed bids. Highest bid wins, pays own bid. |
+
+## Examples
+
+See [`examples/`](examples/) for ready-to-run scripts:
+
+- [`unfair_split.py`](examples/unfair_split.py) — two LLM agents negotiate a resource split
+- [`first_price_auction.py`](examples/first_price_auction.py) — two LLM bidders in a sealed-bid auction
 
 ## Documentation
 

@@ -26,8 +26,8 @@ wheels/
 venv/
 ENV/
 env/
-logs
-example*.py
+logs/
+
 # IDE
 .idea/
 .vscode/
@@ -54,3 +54,5 @@ htmlcov/
 
 # MkDocs
 site/
+
+example_*.py
